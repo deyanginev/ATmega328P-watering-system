@@ -1,0 +1,49 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.31205.134
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MoisturingSystem", "MoisturingSystem.vcxproj", "{C5F80730-F44F-4478-BDAE-6634EFC2CA88}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MSConfigurator", "MSConfigurator\MSConfigurator.vcxproj", "{69D4574C-606A-4CFB-81D9-1EB836A118BC}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LiquidCrystal-1.0.7", "Libraries\LiquidCrystal\1.0.7\LiquidCrystal\LiquidCrystal-1.0.7.vcxitems", "{3E8EDF93-CBCD-4004-867C-1301F735D4DA}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MSExperiments", "MSExperiments\MSExperiments.vcxproj", "{E6B2C5FC-AB46-479C-B6B4-1D128552ABCF}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EEPROM-2.0", "Libraries\EEPROM\2.0\EEPROM\EEPROM-2.0.vcxitems", "{7ED39253-9AF4-40D7-A827-5294BE2521E2}"
+EndProject
+Global
+	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		Libraries\LiquidCrystal\1.0.7\LiquidCrystal\LiquidCrystal-1.0.7.vcxitems*{3e8edf93-cbcd-4004-867c-1301f735d4da}*SharedItemsImports = 9
+		Libraries\LiquidCrystal\1.0.7\LiquidCrystal\LiquidCrystal-1.0.7.vcxitems*{69d4574c-606a-4cfb-81d9-1eb836a118bc}*SharedItemsImports = 4
+		Libraries\EEPROM\2.0\EEPROM\EEPROM-2.0.vcxitems*{7ed39253-9af4-40d7-a827-5294be2521e2}*SharedItemsImports = 9
+		Libraries\EEPROM\2.0\EEPROM\EEPROM-2.0.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\LiquidCrystal\1.0.7\LiquidCrystal\LiquidCrystal-1.0.7.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\EEPROM\2.0\EEPROM\EEPROM-2.0.vcxitems*{e6b2c5fc-ab46-479c-b6b4-1d128552abcf}*SharedItemsImports = 4
+	EndGlobalSection
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x86 = Debug|x86
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Debug|x86.ActiveCfg = Debug|Win32
+		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Debug|x86.Build.0 = Debug|Win32
+		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Release|x86.ActiveCfg = Release|Win32
+		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Release|x86.Build.0 = Release|Win32
+		{69D4574C-606A-4CFB-81D9-1EB836A118BC}.Debug|x86.ActiveCfg = Debug|Win32
+		{69D4574C-606A-4CFB-81D9-1EB836A118BC}.Debug|x86.Build.0 = Debug|Win32
+		{69D4574C-606A-4CFB-81D9-1EB836A118BC}.Release|x86.ActiveCfg = Release|Win32
+		{69D4574C-606A-4CFB-81D9-1EB836A118BC}.Release|x86.Build.0 = Release|Win32
+		{E6B2C5FC-AB46-479C-B6B4-1D128552ABCF}.Debug|x86.ActiveCfg = Debug|Win32
+		{E6B2C5FC-AB46-479C-B6B4-1D128552ABCF}.Debug|x86.Build.0 = Debug|Win32
+		{E6B2C5FC-AB46-479C-B6B4-1D128552ABCF}.Release|x86.ActiveCfg = Release|Win32
+		{E6B2C5FC-AB46-479C-B6B4-1D128552ABCF}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {C316EB89-9E2D-411C-A6F8-3E38BA58678F}
+	EndGlobalSection
+EndGlobal
