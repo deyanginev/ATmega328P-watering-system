@@ -38,7 +38,7 @@ struct MSysSettings {
 	unsigned long siw = 5000; // 5 seconds for sensor interval while watering
 	unsigned long sid = 60000; // 1 minute for sensor interval while in stand by
 	unsigned long sd = 1000; // 1 second max duration for sensor activation;
-	unsigned long pi = 60000 * 60 * 2; // 2 hours between pump activations
+	unsigned long pi = 60000 * 10; // 10 minutes between pump activations
 	unsigned long pd = 120000; // 2 minutes max pump on duration
 	long apv = 10; // 10% humidity threshold for pump activation
 	long dapv = 60; // 60% humidity threshold for pump deactivation
