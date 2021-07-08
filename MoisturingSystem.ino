@@ -13,8 +13,6 @@
 
 #define BUTTONS_PIN A3
 
-#define BUTTON_PIN 8
-
 enum {
 	far = 0,
 	mid = 1,
@@ -121,7 +119,6 @@ ListItem* addListItem(ActionsList* list, Action* a) {
 
 			if ((*list).last != nullptr) {
 				(*(*list).last).next = item;
-
 			}
 
 			(*list).last = item;
@@ -140,17 +137,6 @@ ListItem* addListItem(ActionsList* list, Action* a) {
 	}
 
 	return nullptr;
-}
-
-int listCount(ActionsList* list) {
-	ListItem* cur = (*list).first;
-	int res = 0;
-	while (cur != nullptr) {
-		cur = (*cur).next;
-		res++;
-	}
-
-	return res;
 }
 
 bool removeListItem(ActionsList* list, Action* item) {
@@ -303,14 +289,12 @@ bool scheduleAction(ActionsList* list, Action* a) {
 }
 
 void initActions() {
-
 	if (actions.a != nullptr) {
 		populateSettings(&actions);
 		scheduleAction(&actionsList, &actions.a[0]);
 		scheduleAction(&actionsList, &actions.a[2]);
 	}
 	else {
-
 		Serial.print("COULD NOT ALLOCATE MEMORY FOR ACTIONS");
 	}
 }
@@ -645,7 +629,7 @@ void doQueueActions(SystemState* state, ActionsList* list) {
 				if (time - (*action).st >= (*action).to) {
 					(*action).tick(state, action);
 				}
-		}
+			}
 			else {
 				if ((*action).isActive) {
 					if (shouldStop(action, time)) {
@@ -663,14 +647,14 @@ void doQueueActions(SystemState* state, ActionsList* list) {
 						if (!(*action).frozen) {
 							removeListItem(&actionsList, action);
 						}
-			}
+					}
 					else {
 						if (time - (*action).st > (*action).to) {
 							(*action).tick(state, action);
 						}
 					}
-	}
-}
+				}
+			}
 		}
 	}
 	else {
