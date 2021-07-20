@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding ="utf-8" ?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" >
+  <PropertyGroup Label="Globals" >
+    <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{1b5cc36e-76c6-4e30-b3a1-51ab496cbdf1}</ItemsProjectGuid>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="$(MSBuildThisFileDirectory)src\File.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\SD.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\utility\Sd2Card.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\utility\SdFile.cpp" />
+<ClCompile Include="$(MSBuildThisFileDirectory)src\utility\SdVolume.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)src\SD.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\FatStructs.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\Sd2Card.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\Sd2PinMap.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\SdFat.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\SdFatmainpage.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\SdFatUtil.h" />
+<ClInclude Include="$(MSBuildThisFileDirectory)src\utility\SdInfo.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="$(MSBuildThisFileDirectory)keywords.txt" />
+<Text Include="$(MSBuildThisFileDirectory)library.properties" />
+<Text Include="$(MSBuildThisFileDirectory)src\README.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)README.adoc" />
+  </ItemGroup>
+</Project>

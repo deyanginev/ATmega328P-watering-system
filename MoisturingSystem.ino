@@ -1,5 +1,20 @@
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include <Adafruit_GFX.h>
 #include <EEPROM.h>
-#define ACTIONS_COUNT 7
+
+
+
+// screen
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define DISPLAY_INIT_ADDRESS 0x3C
+
+// end of screen
+
+#define ACTIONS_COUNT 8
+#define SENSORS_COUNT 3
 
 #define PUMP_PIN 4
 #define SENSOR_PIN 2
@@ -20,12 +35,26 @@
 #define PIN_VALVE_FAR 10
 #define PIN_VALVE_MID 11
 #define PIN_VALVE_NEAR 12
-#define PIN_VALVE_EON 9
 
 #define BUTTONS_PIN A3
 
+// action defines
+
+#define SENSORS_ACTION 0
+#define SETTINGS_ACTION 1
+#define BUZZER_ACTION 2
+#define OUTLET_FAR_ACTION 3
+#define OUTLET_MID_ACTION 4
+#define OUTLET_NEAR_ACTION 5
+#define PUMP_ACTION 6
+#define DISPLAY_SPLASH_ACTION 7
+
+// end of action defines
+
 //#undef DEBUG
 #define DEBUG
+
+Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 enum {
 	far = 0,
@@ -38,9 +67,8 @@ enum ActionState {
 	SCHEDULED = 1,
 	PENDING = 2,
 	RUNNING = 3,
-	FINISHING = 4,
-	CHILD_RUNNING = 5,
-	CHILD_PENDING = 6
+	CHILD_RUNNING = 4,
+	CHILD_PENDING = 5
 };
 
 // Structures
@@ -51,49 +79,46 @@ struct MSysSettings {
 	unsigned long sd = 1000; // 1 second max duration for sensor activation;
 	unsigned long pi = 60000 * 10; // 10 minutes between pump activations
 	unsigned long pd = 60000 * 2; // 2 minutes max pump on duration
-	long apv = 10; // 10% humidity threshold for pump activation
-	long dapv = 60; // 60% humidity threshold for pump deactivation
+	long apv = 50; // % humidity threshold for pump activation
+	long dapv = 80; // % humidity threshold for pump deactivation
 } settings;
 
 struct Sensor {
-	int wet;
-	int dry;
-	int value;
-	int ac;
-};
-
-struct Sensors {
-	size_t s;
-	Sensor* d;
+	int wet; // completely wet reading
+	int dry; // completely dry reading
+	int value; // current reading
+	int ai; // action index
+	float p; // humidity percentage
 };
 
 struct SystemState {
-	Sensors s = { 3, (Sensor*)malloc(sizeof(Sensor) * 3) };
+	Sensor* s = nullptr;
 	bool p = false;
 } state;
 
 struct Action {
-	int code;
-	bool frozen = false;
+	Action* next = nullptr;
+	Action* prev = nullptr;
+	bool clear;
+	bool frozen = false; // once scheduled the action never expires
 	bool stopRequested = false;
 	unsigned long ti = 0; // interval between executions
 	unsigned long td = 1000; // maximum duration interval
 	unsigned long lst = -1; // last stop time
-	unsigned long to = 200; // first tick offset from start
+	unsigned long to = 0; // first tick offset from start
 	unsigned long st = 0; // last start time
 	ActionState state = NON_ACTIVE;
 	void (*tick)(SystemState*, Action*);
 	void (*start)(SystemState*, Action*);
 	void (*stop)(SystemState*, Action*);
-	Action* child = nullptr;
+	Action* child = nullptr; // a child action; Child actions are activated after the master action has been activated;
+							 // child actions are deactivated before the master action is deactivated;
+							 // child actions are not part of the execution queue
 };
 
-
-struct ListItem {
-	Action* value = nullptr;
-	ListItem* prev = nullptr;
-	ListItem* next = nullptr;
-};
+// An array used for iterating over scheduled
+// actions and executing them
+Action* availableActions = nullptr;
 
 struct ButtonState {
 	int value = 0;
@@ -102,25 +127,29 @@ struct ButtonState {
 
 struct ActionsList {
 	size_t count = 0;
-	ListItem* first = nullptr;
-	ListItem* last = nullptr;
-} actionsList;
-
-
-struct ActionsArray {
-	size_t s;
-	Action* a = (Action*)malloc(sizeof(Action) * ACTIONS_COUNT);
-} actions;
+	Action* first = nullptr;
+	Action* last = nullptr;
+} executionList;
 
 // end of structures
 
 // Queue
 
-ListItem* find(ActionsList* list, Action* item) {
-	ListItem* cur = (*list).first;
+int indexOfAction(Action* a) {
+	for (int i = 0; i < ACTIONS_COUNT; i++) {
+		if (a == &availableActions[i]) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+Action* find(ActionsList* list, Action* item) {
+	Action* cur = (*list).first;
 
 	while (cur != nullptr) {
-		if ((*cur).value == item) {
+		if (cur == item) {
 			return cur;
 		}
 		cur = (*cur).next;
@@ -131,11 +160,11 @@ ListItem* find(ActionsList* list, Action* item) {
 #ifdef DEBUG
 
 void printList(ActionsList* list) {
-	ListItem* cur = (*list).first;
+	Action* cur = (*list).first;
 
 	while (cur != nullptr) {
-		Serial.print(" Item: ");
-		Serial.print((*(*cur).value).code);
+		Serial.print(F(" Item: "));
+		Serial.print(indexOfAction(cur));
 		Serial.flush();
 		cur = (*cur).next;
 	}
@@ -145,49 +174,41 @@ void printList(ActionsList* list) {
 
 #endif
 
-ListItem* addListItem(ActionsList* list, Action* a) {
+Action* addListItem(ActionsList* list, Action* a) {
 
 	if (a != nullptr) {
 
-		ListItem* item = (ListItem*)malloc(sizeof(ListItem));
-		if (item != nullptr) {
+		(*a).next = nullptr;
+		(*a).prev = (*list).last;
 
-			(*item).next = nullptr;
-			(*item).prev = nullptr;
-
-			(*item).value = a;
-			(*item).prev = (*list).last;
-
-			if ((*list).last != nullptr) {
-				(*(*list).last).next = item;
-			}
-
-			(*list).last = item;
-
-			if ((*list).first == nullptr) {
-				(*list).first = item;
-			}
-
-			(*list).count++;
-#ifdef DEBUG
-			printList(list);
-#endif
-			return item;
+		if ((*list).last != nullptr) {
+			(*(*list).last).next = a;
 		}
-		else {
-#ifdef DEBUG
-			Serial.print("Could not allocate memory for a new ListItem");
-#endif
+
+		(*list).last = a;
+
+		if ((*list).first == nullptr) {
+			(*list).first = a;
 		}
+
+		(*list).count++;
+#ifdef DEBUG
+		printList(list);
+#endif
+		return a;
 	}
-	Serial.println("Item to add null");
+	else {
+#ifdef DEBUG
+		Serial.println(F("ITEM: null"));
+#endif
+	}
 
 	return nullptr;
 }
 
 bool removeListItem(ActionsList* list, Action* item) {
 
-	ListItem* tr = find(list, item);
+	Action* tr = find(list, item);
 
 	if (tr == nullptr) {
 		return false;
@@ -201,8 +222,8 @@ bool removeListItem(ActionsList* list, Action* item) {
 		(*list).first = (*tr).next;
 	}
 
-	ListItem* pr = (*tr).prev;
-	ListItem* nx = (*tr).next;
+	Action* pr = (*tr).prev;
+	Action* nx = (*tr).next;
 
 	if (pr != nullptr) {
 		(*pr).next = nx;
@@ -215,8 +236,6 @@ bool removeListItem(ActionsList* list, Action* item) {
 	(*tr).prev = nullptr;
 	(*tr).next = nullptr;
 
-	free(tr);
-
 	(*list).count--;
 #ifdef DEBUG
 	printList(list);
@@ -228,7 +247,7 @@ bool removeListItem(ActionsList* list, Action* item) {
 
 int printAndReturnValue(int value) {
 #ifdef DEBUG
-	Serial.print("Value: ");
+	Serial.print(F("Value: "));
 	Serial.print(value);
 	Serial.println();
 #endif
@@ -237,156 +256,155 @@ int printAndReturnValue(int value) {
 
 void printDryWetValues(SystemState* state) {
 
-	Serial.print("------\n");
-	Serial.print("Dry values: \n");
+	Serial.print(F("------\n"));
+	Serial.print(F("Dry values: \n"));
 
-	printAndReturnValue((*state).s.d[far].dry);
-	printAndReturnValue((*state).s.d[mid].dry);
-	printAndReturnValue((*state).s.d[near].dry);
+	printAndReturnValue((*state).s[far].dry);
+	printAndReturnValue((*state).s[mid].dry);
+	printAndReturnValue((*state).s[near].dry);
 
-	Serial.print("Wet values: \n");
+	Serial.print(F("Wet values: \n"));
 
-	printAndReturnValue((*state).s.d[far].wet);
-	printAndReturnValue((*state).s.d[mid].wet);
-	printAndReturnValue((*state).s.d[near].wet);
+	printAndReturnValue((*state).s[far].wet);
+	printAndReturnValue((*state).s[mid].wet);
+	printAndReturnValue((*state).s[near].wet);
 
-	Serial.print("------\n");
+	Serial.print(F("------\n"));
 
 	Serial.flush();
-
 }
 
 // Helpers
 
-void populateSettings(SystemState* state, ActionsArray* actions) {
+void populateSettings(SystemState* state, Action* actions) {
 
 
 	// read sensors action
-	(*actions).a[0].tick = &tickSensors;
-	(*actions).a[0].frozen = true;
-	(*actions).a[0].stopRequested = false;
-	(*actions).a[0].start = &startSensors;
-	(*actions).a[0].stop = &stopSensors;
-	(*actions).a[0].ti = settings.siw;
-	(*actions).a[0].td = settings.sd;
-	(*actions).a[0].to = 200;
-	(*actions).a[0].code = 1;
-	(*actions).a[0].state = NON_ACTIVE;
-	(*actions).a[0].child = nullptr;
-	(*actions).a[0].lst = 0;
-	(*actions).a[0].st = 0;
+	actions[SENSORS_ACTION].tick = &tickSensors;
+	actions[SENSORS_ACTION].frozen = true;
+	actions[SENSORS_ACTION].stopRequested = false;
+	actions[SENSORS_ACTION].start = &startSensors;
+	actions[SENSORS_ACTION].stop = &stopSensors;
+	actions[SENSORS_ACTION].ti = settings.siw;
+	actions[SENSORS_ACTION].td = settings.sd;
+	actions[SENSORS_ACTION].to = 200;
+	actions[SENSORS_ACTION].clear = false;
+	actions[SENSORS_ACTION].state = NON_ACTIVE;
+	actions[SENSORS_ACTION].child = nullptr;
+	actions[SENSORS_ACTION].lst = 0;
+	actions[SENSORS_ACTION].st = 0;
 
 	// settings action
-	(*actions).a[1].tick = &tickModifySettings;
-	(*actions).a[1].frozen = true;
-	(*actions).a[1].stopRequested = false;
-	(*actions).a[1].start = &startModifySettings;
-	(*actions).a[1].stop = &stopModifySettings;
-	(*actions).a[1].ti = 100;
-	(*actions).a[1].td = 300;
-	(*actions).a[1].code = 2;
-	(*actions).a[1].to = 0;
-	(*actions).a[1].state = NON_ACTIVE;
-	(*actions).a[1].child = nullptr;
-	(*actions).a[1].lst = 0;
-	(*actions).a[1].st = 0;
+	actions[SETTINGS_ACTION].tick = &tickModifySettings;
+	actions[SETTINGS_ACTION].frozen = true;
+	actions[SETTINGS_ACTION].stopRequested = false;
+	actions[SETTINGS_ACTION].start = &startModifySettings;
+	actions[SETTINGS_ACTION].stop = &stopModifySettings;
+	actions[SETTINGS_ACTION].ti = 100;
+	actions[SETTINGS_ACTION].td = 300;
+	actions[SETTINGS_ACTION].clear = false;
+	actions[SETTINGS_ACTION].to = 0;
+	actions[SETTINGS_ACTION].state = NON_ACTIVE;
+	actions[SETTINGS_ACTION].child = nullptr;
+	actions[SETTINGS_ACTION].lst = 0;
+	actions[SETTINGS_ACTION].st = 0;
 
 	// sound buzzer action
-	(*actions).a[2].tick = &tickBuzzer;
-	(*actions).a[2].frozen = false;
-	(*actions).a[2].stopRequested = false;
-	(*actions).a[2].start = &startBuzzer;
-	(*actions).a[2].stop = &stopBuzzer;
-	(*actions).a[2].ti = 0;
-	(*actions).a[2].td = 300;
-	(*actions).a[2].code = 3;
-	(*actions).a[2].to = 0;
-	(*actions).a[2].state = NON_ACTIVE;
-	(*actions).a[2].child = nullptr;
-	(*actions).a[2].lst = 0;
-	(*actions).a[2].st = 0;
+	actions[BUZZER_ACTION].tick = &tickBuzzer;
+	actions[BUZZER_ACTION].frozen = false;
+	actions[BUZZER_ACTION].stopRequested = false;
+	actions[BUZZER_ACTION].start = &startBuzzer;
+	actions[BUZZER_ACTION].stop = &stopBuzzer;
+	actions[BUZZER_ACTION].ti = 0;
+	actions[BUZZER_ACTION].td = 300;
+	actions[BUZZER_ACTION].clear = false;
+	actions[BUZZER_ACTION].to = 0;
+	actions[BUZZER_ACTION].state = NON_ACTIVE;
+	actions[BUZZER_ACTION].child = nullptr;
+	actions[BUZZER_ACTION].lst = 0;
+	actions[BUZZER_ACTION].st = 0;
 
 	// open far valve action
-	(*actions).a[3].tick = &tickFarOutlet;
-	(*actions).a[3].frozen = false;
-	(*actions).a[3].stopRequested = false;
-	(*actions).a[3].start = &startFarOutlet;
-	(*actions).a[3].stop = &stopFarOutlet;
-	(*actions).a[3].ti = settings.pi;
-	(*actions).a[3].td = settings.pd;
-	(*actions).a[3].code = 4;
-	(*actions).a[3].to = 0;
-	(*actions).a[3].state = NON_ACTIVE;
-	(*actions).a[3].child = &(*actions).a[6];
-	(*actions).a[3].lst = 0;
-	(*actions).a[3].st = 0;
+	actions[OUTLET_FAR_ACTION].tick = &tickFarOutlet;
+	actions[OUTLET_FAR_ACTION].frozen = false;
+	actions[OUTLET_FAR_ACTION].stopRequested = false;
+	actions[OUTLET_FAR_ACTION].start = &startFarOutlet;
+	actions[OUTLET_FAR_ACTION].stop = &stopFarOutlet;
+	actions[OUTLET_FAR_ACTION].ti = settings.pi;
+	actions[OUTLET_FAR_ACTION].td = settings.pd;
+	actions[OUTLET_FAR_ACTION].clear = false;
+	actions[OUTLET_FAR_ACTION].to = 0;
+	actions[OUTLET_FAR_ACTION].state = NON_ACTIVE;
+	actions[OUTLET_FAR_ACTION].child = &actions[6];
+	actions[OUTLET_FAR_ACTION].lst = 0;
+	actions[OUTLET_FAR_ACTION].st = 0;
 
 
-	(*state).s.d[far].ac = (*actions).a[3].code;
+	(*state).s[far].ai = OUTLET_FAR_ACTION;
 
 	// open mid valve action
-	(*actions).a[4].tick = &tickMidOutlet;
-	(*actions).a[4].frozen = false;
-	(*actions).a[4].stopRequested = false;
-	(*actions).a[4].start = &startMidOutlet;
-	(*actions).a[4].stop = &stopMidOutlet;
-	(*actions).a[4].ti = settings.pi;
-	(*actions).a[4].td = settings.pd;
-	(*actions).a[4].code = 5;
-	(*actions).a[4].to = 0;
-	(*actions).a[4].state = NON_ACTIVE;
-	(*actions).a[4].child = &(*actions).a[6];
-	(*actions).a[4].lst = 0;
-	(*actions).a[4].st = 0;
+	actions[OUTLET_MID_ACTION].tick = &tickMidOutlet;
+	actions[OUTLET_MID_ACTION].frozen = false;
+	actions[OUTLET_MID_ACTION].stopRequested = false;
+	actions[OUTLET_MID_ACTION].start = &startMidOutlet;
+	actions[OUTLET_MID_ACTION].stop = &stopMidOutlet;
+	actions[OUTLET_MID_ACTION].ti = settings.pi;
+	actions[OUTLET_MID_ACTION].td = settings.pd;
+	actions[OUTLET_MID_ACTION].clear = false;
+	actions[OUTLET_MID_ACTION].to = 0;
+	actions[OUTLET_MID_ACTION].state = NON_ACTIVE;
+	actions[OUTLET_MID_ACTION].child = &actions[6];
+	actions[OUTLET_MID_ACTION].lst = 0;
+	actions[OUTLET_MID_ACTION].st = 0;
 
-	(*state).s.d[mid].ac = (*actions).a[4].code;
+	(*state).s[mid].ai = OUTLET_MID_ACTION;
 
 	// open near valve action
-	(*actions).a[5].tick = &tickNearOutlet;
-	(*actions).a[5].frozen = false;
-	(*actions).a[5].stopRequested = false;
-	(*actions).a[5].start = &startNearOutlet;
-	(*actions).a[5].stop = &stopNearOutlet;
-	(*actions).a[5].ti = settings.pi;
-	(*actions).a[5].td = settings.pd;
-	(*actions).a[5].code = 6;
-	(*actions).a[5].to = 0;
-	(*actions).a[5].state = NON_ACTIVE;
-	(*actions).a[5].child = &(*actions).a[6];
-	(*actions).a[5].lst = 0;
-	(*actions).a[5].st = 0;
+	actions[OUTLET_NEAR_ACTION].tick = &tickNearOutlet;
+	actions[OUTLET_NEAR_ACTION].frozen = false;
+	actions[OUTLET_NEAR_ACTION].stopRequested = false;
+	actions[OUTLET_NEAR_ACTION].start = &startNearOutlet;
+	actions[OUTLET_NEAR_ACTION].stop = &stopNearOutlet;
+	actions[OUTLET_NEAR_ACTION].ti = settings.pi;
+	actions[OUTLET_NEAR_ACTION].td = settings.pd;
+	actions[OUTLET_NEAR_ACTION].clear = false;
+	actions[OUTLET_NEAR_ACTION].to = 0;
+	actions[OUTLET_NEAR_ACTION].state = NON_ACTIVE;
+	actions[OUTLET_NEAR_ACTION].child = &actions[6];
+	actions[OUTLET_NEAR_ACTION].lst = 0;
+	actions[OUTLET_NEAR_ACTION].st = 0;
 
-	(*state).s.d[near].ac = (*actions).a[5].code;
+	(*state).s[near].ai = OUTLET_NEAR_ACTION;
 
 	// start pump action
-	(*actions).a[6].tick = &tickPump;
-	(*actions).a[6].frozen = false;
-	(*actions).a[6].stopRequested = false;
-	(*actions).a[6].start = &startPump;
-	(*actions).a[6].stop = &stopPump;
-	(*actions).a[6].ti = 0;
-	(*actions).a[6].td = 0;
-	(*actions).a[6].code = 7;
-	(*actions).a[6].to = 0;
-	(*actions).a[6].state = NON_ACTIVE;
-	(*actions).a[6].child = nullptr;
-	(*actions).a[6].lst = 0;
-	(*actions).a[6].st = 0;
-}
+	actions[PUMP_ACTION].tick = &tickPump;
+	actions[PUMP_ACTION].frozen = false;
+	actions[PUMP_ACTION].stopRequested = false;
+	actions[PUMP_ACTION].start = &startPump;
+	actions[PUMP_ACTION].stop = &stopPump;
+	actions[PUMP_ACTION].ti = 0;
+	actions[PUMP_ACTION].td = 0;
+	actions[PUMP_ACTION].clear = false;
+	actions[PUMP_ACTION].to = 0;
+	actions[PUMP_ACTION].state = NON_ACTIVE;
+	actions[PUMP_ACTION].child = nullptr;
+	actions[PUMP_ACTION].lst = 0;
+	actions[PUMP_ACTION].st = 0;
 
-unsigned long extractValue(String* instruction, String command, int defaultValue) {
-	int cmdI = (*instruction).indexOf(command);
-	if (cmdI != -1) {
-		int cei = (*instruction).indexOf(';', cmdI);
-		if (cei != -1) {
-			int si = cmdI + command.length();
-			String sv = (*instruction).substring(si, cei);
-			unsigned long iv = sv.toInt();
-			return iv != 0 ? iv : defaultValue;
-		}
-	}
-
-	return defaultValue;
+	// display SPLASH action
+	actions[DISPLAY_SPLASH_ACTION].tick = &tickDisplaySplash;
+	actions[DISPLAY_SPLASH_ACTION].frozen = false;
+	actions[DISPLAY_SPLASH_ACTION].stopRequested = false;
+	actions[DISPLAY_SPLASH_ACTION].start = &startDisplaySplash;
+	actions[DISPLAY_SPLASH_ACTION].stop = &stopDisplaySplash;
+	actions[DISPLAY_SPLASH_ACTION].ti = 1000;
+	actions[DISPLAY_SPLASH_ACTION].td = 5000;
+	actions[DISPLAY_SPLASH_ACTION].clear = false;
+	actions[DISPLAY_SPLASH_ACTION].to = 0;
+	actions[DISPLAY_SPLASH_ACTION].state = NON_ACTIVE;
+	actions[DISPLAY_SPLASH_ACTION].child = nullptr;
+	actions[DISPLAY_SPLASH_ACTION].lst = 0;
+	actions[DISPLAY_SPLASH_ACTION].st = 0;
 }
 
 void makeBeeps(int count) {
@@ -397,8 +415,8 @@ void makeBeeps(int count) {
 }
 
 void scheduleBuzzerAction(int millis) {
-	actions.a[2].td = millis;
-	scheduleAction(&actionsList, &actions.a[2]);
+	availableActions[BUZZER_ACTION].td = millis;
+	scheduleAction(&executionList, &availableActions[BUZZER_ACTION]);
 }
 
 void soundBuzzer(int millis) {
@@ -408,17 +426,15 @@ void soundBuzzer(int millis) {
 }
 
 bool descheduleAction(ActionsList* list, Action* a) {
-	ListItem* found = find(list, a);
+	Action* found = find(list, a);
 	if (found == nullptr) {
 		return false;
 	}
 
-	Action* foundAction = (*found).value;
+	if (found != nullptr && (*found).state != RUNNING) {
+		(*found).state = NON_ACTIVE;
 
-	if (foundAction != nullptr && (*foundAction).state != RUNNING) {
-		(*foundAction).state = NON_ACTIVE;
-
-		removeListItem(&actionsList, foundAction);
+		removeListItem(&executionList, found);
 
 		return true;
 	}
@@ -426,20 +442,8 @@ bool descheduleAction(ActionsList* list, Action* a) {
 	return false;
 }
 
-Action* findActionByCode(int code) {
-	for (int i = 0; i < ACTIONS_COUNT; i++) {
-		Action* current = &actions.a[i];
-		if ((*current).code == code) {
-			return current;
-		}
-	}
-
-	return nullptr;
-}
-
-
 bool scheduleAction(ActionsList* list, Action* a) {
-	ListItem* found = find(list, a);
+	Action* found = find(list, a);
 	if (found != nullptr) {
 		return false;
 	}
@@ -458,14 +462,15 @@ bool scheduleAction(ActionsList* list, Action* a) {
 }
 
 void initActions(SystemState* state) {
-	if (actions.a != nullptr) {
-		populateSettings(state, &actions);
-		scheduleAction(&actionsList, &actions.a[0]);
-		scheduleAction(&actionsList, &actions.a[1]);
+	if (availableActions != nullptr) {
+		populateSettings(state, availableActions);
+		scheduleAction(&executionList, &availableActions[SENSORS_ACTION]);
+		scheduleAction(&executionList, &availableActions[SETTINGS_ACTION]);
+		scheduleAction(&executionList, &availableActions[DISPLAY_SPLASH_ACTION]);
 	}
 	else {
 #ifdef DEBUG
-		Serial.print("COULD NOT ALLOCATE MEMORY FOR ACTIONS");
+		Serial.println(F("MEM: Actions"));
 #endif
 	}
 }
@@ -497,6 +502,35 @@ void extractMedianPinValueForProperty(int delayInterval, int* near, int* mid, in
 // End of Helpers
 
 // Actions
+
+// Display
+
+void startDisplaySplash(SystemState* state, Action* a) {
+	oled.clearDisplay();
+	oled.drawRoundRect(0, 0, 128, 64, 10, WHITE);
+	oled.display();
+}
+
+void tickDisplaySplash(SystemState* state, Action* a) {
+
+}
+
+void stopDisplaySplash(SystemState* state, Action* a) {
+	oled.clearDisplay();
+}
+
+void startDisplayHome(SystemState* state, Action* a) {
+}
+
+void tickDisplayHome(SystemState* state, Action* a) {
+
+}
+
+void stopDisplayHome(SystemState* state, Action* a) {
+
+}
+
+// end of Display
 
 // Outlets
 
@@ -558,28 +592,29 @@ void stopSensors(SystemState* state, Action* a) {
 
 void tickSensors(SystemState* state, Action* a) {
 
-	extractMedianPinValueForProperty(0, &(*state).s.d[near].value, &(*state).s.d[mid].value, &(*state).s.d[far].value);
+	extractMedianPinValueForProperty(0, &(*state).s[near].value, &(*state).s[mid].value, &(*state).s[far].value);
 
 	bool activate = false;
 	Action* toSchedule = nullptr;
-	Action** acandidates = (Action**)malloc(sizeof(Action*) * (*state).s.s);
+	Action** acandidates = (Action**)malloc(sizeof(Action*) * SENSORS_COUNT);
 	int pc = 0;
 	int ac = 0;
-	for (int i = 0; i < (*state).s.s; i++) {
-		Sensor* se = &(*state).s.d[i];
+	for (int i = 0; i < SENSORS_COUNT; i++) {
+		Sensor* se = &(*state).s[i];
 		float v = (float)(*se).value;
 		float d = (float)(*se).dry;
 		float w = (float)(*se).wet;
 		float dwd = max(0.00001, d - w);
 
 		float mp = ((d - min(max(v, w), d)) / dwd) * 100.0;
+		(*se).p = mp;
 #ifdef DEBUG
-		Serial.print("Current percentage: ");
+		Serial.print(F("%: "));
 		Serial.print(mp);
 		Serial.println();
 #endif
 		activate = (bool)((long)mp < ((*state).p ? settings.dapv : settings.apv));
-		Action* ca = findActionByCode((*se).ac);
+		Action* ca = &availableActions[(*se).ai];
 
 		acandidates[i] = nullptr;
 		if (activate && ca != nullptr) {
@@ -589,22 +624,22 @@ void tickSensors(SystemState* state, Action* a) {
 				pc++;
 			}
 			else if ((*ca).state == PENDING) {
-				descheduleAction(&actionsList, ca);
+				requestStop(&executionList, ca);
 			}
 		}
 		else if (ca != nullptr) {
 			// Stop the action for which activate is false
-			requestStop(&actionsList, ca);
+			requestStop(&executionList, ca);
 		}
 	}
 
 	// if the available outlets are equal to the 
-	// ones needed to be activate - we select the 
+	// ones needed to be activated - we select the 
 	// one that was activated the earliest
 	if (pc == ac) {
 
 		Action* ts = nullptr;
-		for (int i = 0; i < (*state).s.s; i++) {
+		for (int i = 0; i < SENSORS_COUNT; i++) {
 			Action* c = acandidates[i];
 
 			if (c != nullptr) {
@@ -620,13 +655,12 @@ void tickSensors(SystemState* state, Action* a) {
 		}
 
 		if (ts != nullptr) {
-			scheduleAction(&actionsList, ts);
+			scheduleAction(&executionList, ts);
 		}
 	}
 
-	(*a).ti = actions.a[6].state == CHILD_RUNNING ? settings.siw : settings.sid;
+	(*a).ti = availableActions[PUMP_ACTION].state == CHILD_RUNNING ? settings.siw : settings.sid;
 	free(acandidates);
-
 }
 
 //end of sensors
@@ -734,6 +768,20 @@ void tickModifySettings(SystemState* state, Action* a) {
 
 // end of Actions
 
+void allocateMemPools(SystemState* state) {
+	availableActions = (Action*)calloc(ACTIONS_COUNT, sizeof(Action));
+	(*state).s = (Sensor*)calloc(SENSORS_COUNT, sizeof(Sensor));
+}
+
+void initScreen(SystemState* state) {
+	if (!oled.begin(SSD1306_SWITCHCAPVCC, DISPLAY_INIT_ADDRESS, -1)) {
+		Serial.println(F("FAIL: Screen"));
+		while (true);
+	}
+
+	oled.display();
+}
+
 void init(SystemState* state) {
 	// init must be made with completely dry state values
 
@@ -754,25 +802,25 @@ void init(SystemState* state) {
 		EEPROM.get(sizeof(int) * 4, mw);
 		EEPROM.get(sizeof(int) * 5, fw);
 
-		(*state).s.d[near].dry = nd;
-		(*state).s.d[mid].dry = md;
-		(*state).s.d[far].dry = fd;
+		(*state).s[near].dry = nd;
+		(*state).s[mid].dry = md;
+		(*state).s[far].dry = fd;
 
-		(*state).s.d[near].wet = nw;
-		(*state).s.d[mid].wet = mw;
-		(*state).s.d[far].wet = fw;
+		(*state).s[near].wet = nw;
+		(*state).s[mid].wet = mw;
+		(*state).s[far].wet = fw;
 
 		printDryWetValues(state);
 #ifdef DEBUG
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
 #endif
-		while (bs < 200 || bs > 280) {
-			bs = analogRead(BUTTONS_PIN);
-			//#ifdef DEBUG
-			//			extractMedianPinValueForProperty(1000, &(*state).s.d[near].dry, &(*state).s.d[mid].dry, &(*state).s.d[far].dry);
-			//			delay(1000);
-			//#endif
-		}
+		//while (bs < 200 || bs > 280) {
+		//	bs = analogRead(BUTTONS_PIN);
+		//	//#ifdef DEBUG
+		//	//			extractMedianPinValueForProperty(1000, &(*state).s.d[near].dry, &(*state).s.d[mid].dry, &(*state).s.d[far].dry);
+		//	//			delay(1000);
+		//	//#endif
+		//}
 
 #ifdef DEBUG
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
@@ -794,11 +842,11 @@ void init(SystemState* state) {
 		soundBuzzer(300);
 
 		// waiting for completely wet values
-		extractMedianPinValueForProperty(1000, &(*state).s.d[near].dry, &(*state).s.d[mid].dry, &(*state).s.d[far].dry);
+		extractMedianPinValueForProperty(1000, &(*state).s[near].dry, &(*state).s[mid].dry, &(*state).s[far].dry);
 
-		EEPROM.put(0, (*state).s.d[near].dry);
-		EEPROM.put(sizeof(int), (*state).s.d[mid].dry);
-		EEPROM.put(sizeof(int) * 2, (*state).s.d[far].dry);
+		EEPROM.put(0, (*state).s[near].dry);
+		EEPROM.put(sizeof(int), (*state).s[mid].dry);
+		EEPROM.put(sizeof(int) * 2, (*state).s[far].dry);
 
 		// fire buzzer to notify that dry values have been read
 		soundBuzzer(1000);
@@ -811,12 +859,12 @@ void init(SystemState* state) {
 		soundBuzzer(300);
 
 		// waiting for completely wet values
-		extractMedianPinValueForProperty(1000, &(*state).s.d[near].wet, &(*state).s.d[mid].wet, &(*state).s.d[far].wet);
+		extractMedianPinValueForProperty(1000, &(*state).s[near].wet, &(*state).s[mid].wet, &(*state).s[far].wet);
 
 
-		EEPROM.put(sizeof(int) * 3, (*state).s.d[near].wet);
-		EEPROM.put(sizeof(int) * 4, (*state).s.d[mid].wet);
-		EEPROM.put(sizeof(int) * 5, (*state).s.d[far].wet);
+		EEPROM.put(sizeof(int) * 3, (*state).s[near].wet);
+		EEPROM.put(sizeof(int) * 4, (*state).s[mid].wet);
+		EEPROM.put(sizeof(int) * 5, (*state).s[far].wet);
 
 		// wet values have been read
 		soundBuzzer(1000);
@@ -835,7 +883,7 @@ void init(SystemState* state) {
 }
 
 bool requestStop(ActionsList* list, Action* a) {
-	ListItem* item = find(list, a);
+	Action* item = find(list, a);
 	if (item != nullptr) {
 		(*a).stopRequested = true;
 		return true;
@@ -845,6 +893,10 @@ bool requestStop(ActionsList* list, Action* a) {
 }
 
 bool canStart(Action* a, unsigned long time) {
+
+	if ((*a).stopRequested) {
+		return false;
+	}
 
 	if ((*a).state == RUNNING) {
 		return false;
@@ -861,103 +913,114 @@ bool shouldStop(Action* a, unsigned long time) {
 
 	if ((*a).stopRequested) {
 #ifdef DEBUG
-		Serial.print("Stop requested");
+		Serial.print(F("Stop req"));
 #endif
 		return true;
 	}
 
-	if ((*a).td > 0 && (*a).st > 0 && (time - (*a).st >= (*a).td)) {
-		return true;
+	if ((*a).state == RUNNING) {
+		if ((*a).td > 0 && (*a).st > 0 && (time - (*a).st >= (*a).td)) {
+			return true;
+		}
 	}
 
 	return false;
 }
 
 void doQueueActions(SystemState* state, ActionsList* list) {
-	ListItem* current = (*list).first;
+	Action* action = (*list).first;
 	unsigned long time = millis();
 	int count = (*list).count;
 
-	Action** scheduled = (Action**)malloc(sizeof(Action*) * count);
-
-	if (scheduled != nullptr) {
-		int i = 0;
-
-		while (current != nullptr) {
-			scheduled[i++] = (*current).value;
-			current = (*current).next;
-		}
-
-		for (int k = 0; k < count; k++) {
-			Action* action = scheduled[k];
-
-			if (canStart(action, time)) {
+	int i = 0;
+	while (action != nullptr) {
+		if (canStart(action, time)) {
 #ifdef DEBUG
-				Serial.print("Starting: ");
-				Serial.print((*action).code);
-				Serial.println();
+			Serial.print(F("Starting: "));
+			Serial.print(indexOfAction(action));
+			Serial.println();
 #endif
 
-				(*action).start(state, action);
-				(*action).state = RUNNING;
-				(*action).st = time;
+			(*action).start(state, action);
+			(*action).state = RUNNING;
+			(*action).st = time;
+
+			Action* child = (*action).child;
+			while (child != nullptr) {
+#ifdef DEBUG
+				Serial.print(F("Starting child: "));
+				Serial.println(indexOfAction(child));
+#endif
+				(*child).start(state, child);
+				(*child).state = CHILD_RUNNING;
+				child = (*child).child;
+			}
+		}
+		else {
+			if (shouldStop(action, time)) {
+
+#ifdef DEBUG
+				Serial.print(F("Stopping: "));
+				Serial.print(indexOfAction(action));
+				Serial.println();
+#endif
 
 				Action* child = (*action).child;
 				while (child != nullptr) {
 #ifdef DEBUG
-					Serial.print("Stopping child: ");
-					Serial.println((*child).code);
+					Serial.print(F("Stopping child: "));
+					Serial.println(indexOfAction(child));
 #endif
-					(*child).start(state, child);
-					(*child).state = CHILD_RUNNING;
+					(*child).stop(state, child);
+					(*child).state = NON_ACTIVE;
 					child = (*child).child;
 				}
+
+				(*action).stop(state, action);
+				(*action).lst = time;
+				(*action).state = PENDING;
+				(*action).clear = true;
 			}
 			else {
-				if ((*action).state == RUNNING) {
-					if (shouldStop(action, time)) {
-
-#ifdef DEBUG
-						Serial.print("Stopping: ");
-						Serial.print((*action).code);
-						Serial.println();
-#endif
-
-						(*action).stop(state, action);
-						(*action).lst = time;
-						(*action).state = PENDING;
-
-						if (!(*action).frozen) {
-							descheduleAction(&actionsList, action);
-						}
-
-						Action* child = (*action).child;
-						while (child != nullptr) {
-#ifdef DEBUG
-							Serial.print("Stopping child: ");
-							Serial.println((*child).code);
-#endif
-							(*child).stop(state, child);
-							(*child).state = NON_ACTIVE;
-							child = (*child).child;
-						}
-					}
-					else {
-						if (time - (*action).st > (*action).to) {
-							(*action).tick(state, action);
-						}
-					}
+				if (time - (*action).st > (*action).to) {
+					(*action).tick(state, action);
 				}
 			}
 		}
-	}
-	else {
-#ifdef DEBUG
-		Serial.print("COULD NOT ALLOCATE MEMORY FOR SCHEDULED ACTIONS!!!");
-#endif
+
+		action = (*action).next;
 	}
 
-	free(scheduled);
+	// Iterate over the available actions and stop the
+	// appropriate ones
+	for (int i = 0; i < ACTIONS_COUNT; i++) {
+		Action* a = &availableActions[i];
+		if ((*a).clear) {
+
+			if (!(*a).frozen) {
+				descheduleAction(&executionList, a);
+			}
+			(*a).clear = false;
+		}
+	}
+}
+
+#ifdef __arm__
+// should use uinstd.h to define sbrk but Due causes a conflict
+extern "C" char* sbrk(int incr);
+#else  // __ARM__
+extern char* __brkval;
+#endif  // __arm__
+
+int freeMemory() {
+	char top;
+#ifdef __arm__
+	return &top - reinterpret_cast<char*>(sbrk(0));
+#elif defined(CORE_TEENSY) || (ARDUINO > 103 && ARDUINO != 151)
+	return &top - __brkval;
+#else  // __arm__
+	return __brkval ? &top - __brkval : &top - __malloc_heap_start;
+#endif  // __arm__
 }
 
 void setup() {
@@ -968,13 +1031,10 @@ void setup() {
 	pinMode(PIN_VALVE_FAR, OUTPUT);
 	pinMode(PIN_VALVE_MID, OUTPUT);
 	pinMode(PIN_VALVE_NEAR, OUTPUT);
-	pinMode(PIN_VALVE_EON, OUTPUT);
 
 	digitalWrite(PIN_VALVE_FAR, HIGH);
 	digitalWrite(PIN_VALVE_MID, HIGH);
 	digitalWrite(PIN_VALVE_NEAR, HIGH);
-	digitalWrite(PIN_VALVE_EON, HIGH);
-
 
 	pinMode(BUTTONS_PIN, INPUT);
 	pinMode(MS_BUZZER_PIN, OUTPUT); // buzzer
@@ -985,10 +1045,17 @@ void setup() {
 	pinMode(SENSOR_PIN, OUTPUT); // sensor relay
 	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
 	Serial.begin(9600);
+
+	initScreen(&state);
+	Serial.println(freeMemory());
+	allocateMemPools(&state);
+
+	Serial.println(freeMemory());
+
 	init(&state);
 	initActions(&state);
 }
 
 void loop() {
-	doQueueActions(&state, &actionsList);
+	doQueueActions(&state, &executionList);
 }
