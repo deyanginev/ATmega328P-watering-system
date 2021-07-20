@@ -1,19 +1,6 @@
-#include <Wire.h>
-#include <Adafruit_SSD1306.h>
-#include <Adafruit_GFX.h>
 #include <EEPROM.h>
 
-
-
-// screen
-
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define DISPLAY_INIT_ADDRESS 0x3C
-
-// end of screen
-
-#define ACTIONS_COUNT 8
+#define ACTIONS_COUNT 7
 #define SENSORS_COUNT 3
 
 #define PUMP_PIN 4
@@ -47,14 +34,11 @@
 #define OUTLET_MID_ACTION 4
 #define OUTLET_NEAR_ACTION 5
 #define PUMP_ACTION 6
-#define DISPLAY_SPLASH_ACTION 7
 
 // end of action defines
 
 //#undef DEBUG
 #define DEBUG
-
-Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 enum {
 	far = 0,
@@ -80,7 +64,7 @@ struct MSysSettings {
 	unsigned long pi = 60000 * 10; // 10 minutes between pump activations
 	unsigned long pd = 60000 * 2; // 2 minutes max pump on duration
 	long apv = 50; // % humidity threshold for pump activation
-	long dapv = 80; // % humidity threshold for pump deactivation
+	long dapv = 85; // % humidity threshold for pump deactivation
 } settings;
 
 struct Sensor {
@@ -390,21 +374,6 @@ void populateSettings(SystemState* state, Action* actions) {
 	actions[PUMP_ACTION].child = nullptr;
 	actions[PUMP_ACTION].lst = 0;
 	actions[PUMP_ACTION].st = 0;
-
-	// display SPLASH action
-	actions[DISPLAY_SPLASH_ACTION].tick = &tickDisplaySplash;
-	actions[DISPLAY_SPLASH_ACTION].frozen = false;
-	actions[DISPLAY_SPLASH_ACTION].stopRequested = false;
-	actions[DISPLAY_SPLASH_ACTION].start = &startDisplaySplash;
-	actions[DISPLAY_SPLASH_ACTION].stop = &stopDisplaySplash;
-	actions[DISPLAY_SPLASH_ACTION].ti = 1000;
-	actions[DISPLAY_SPLASH_ACTION].td = 5000;
-	actions[DISPLAY_SPLASH_ACTION].clear = false;
-	actions[DISPLAY_SPLASH_ACTION].to = 0;
-	actions[DISPLAY_SPLASH_ACTION].state = NON_ACTIVE;
-	actions[DISPLAY_SPLASH_ACTION].child = nullptr;
-	actions[DISPLAY_SPLASH_ACTION].lst = 0;
-	actions[DISPLAY_SPLASH_ACTION].st = 0;
 }
 
 void makeBeeps(int count) {
@@ -466,7 +435,6 @@ void initActions(SystemState* state) {
 		populateSettings(state, availableActions);
 		scheduleAction(&executionList, &availableActions[SENSORS_ACTION]);
 		scheduleAction(&executionList, &availableActions[SETTINGS_ACTION]);
-		scheduleAction(&executionList, &availableActions[DISPLAY_SPLASH_ACTION]);
 	}
 	else {
 #ifdef DEBUG
@@ -502,35 +470,6 @@ void extractMedianPinValueForProperty(int delayInterval, int* near, int* mid, in
 // End of Helpers
 
 // Actions
-
-// Display
-
-void startDisplaySplash(SystemState* state, Action* a) {
-	oled.clearDisplay();
-	oled.drawRoundRect(0, 0, 128, 64, 10, WHITE);
-	oled.display();
-}
-
-void tickDisplaySplash(SystemState* state, Action* a) {
-
-}
-
-void stopDisplaySplash(SystemState* state, Action* a) {
-	oled.clearDisplay();
-}
-
-void startDisplayHome(SystemState* state, Action* a) {
-}
-
-void tickDisplayHome(SystemState* state, Action* a) {
-
-}
-
-void stopDisplayHome(SystemState* state, Action* a) {
-
-}
-
-// end of Display
 
 // Outlets
 
@@ -773,15 +712,6 @@ void allocateMemPools(SystemState* state) {
 	(*state).s = (Sensor*)calloc(SENSORS_COUNT, sizeof(Sensor));
 }
 
-void initScreen(SystemState* state) {
-	if (!oled.begin(SSD1306_SWITCHCAPVCC, DISPLAY_INIT_ADDRESS, -1)) {
-		Serial.println(F("FAIL: Screen"));
-		while (true);
-	}
-
-	oled.display();
-}
-
 void init(SystemState* state) {
 	// init must be made with completely dry state values
 
@@ -814,13 +744,9 @@ void init(SystemState* state) {
 #ifdef DEBUG
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
 #endif
-		//while (bs < 200 || bs > 280) {
-		//	bs = analogRead(BUTTONS_PIN);
-		//	//#ifdef DEBUG
-		//	//			extractMedianPinValueForProperty(1000, &(*state).s.d[near].dry, &(*state).s.d[mid].dry, &(*state).s.d[far].dry);
-		//	//			delay(1000);
-		//	//#endif
-		//}
+		while (bs < 200 || bs > 280) {
+			bs = analogRead(BUTTONS_PIN);
+		}
 
 #ifdef DEBUG
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
@@ -982,8 +908,10 @@ void doQueueActions(SystemState* state, ActionsList* list) {
 				(*action).clear = true;
 			}
 			else {
-				if (time - (*action).st > (*action).to) {
-					(*action).tick(state, action);
+				if ((*action).state == RUNNING) {
+					if (time - (*action).st > (*action).to) {
+						(*action).tick(state, action);
+					}
 				}
 			}
 		}
@@ -1005,23 +933,6 @@ void doQueueActions(SystemState* state, ActionsList* list) {
 	}
 }
 
-#ifdef __arm__
-// should use uinstd.h to define sbrk but Due causes a conflict
-extern "C" char* sbrk(int incr);
-#else  // __ARM__
-extern char* __brkval;
-#endif  // __arm__
-
-int freeMemory() {
-	char top;
-#ifdef __arm__
-	return &top - reinterpret_cast<char*>(sbrk(0));
-#elif defined(CORE_TEENSY) || (ARDUINO > 103 && ARDUINO != 151)
-	return &top - __brkval;
-#else  // __arm__
-	return __brkval ? &top - __brkval : &top - __malloc_heap_start;
-#endif  // __arm__
-}
 
 void setup() {
 	pinMode(PIN_FAR, INPUT);
@@ -1046,11 +957,7 @@ void setup() {
 	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
 	Serial.begin(9600);
 
-	initScreen(&state);
-	Serial.println(freeMemory());
 	allocateMemPools(&state);
-
-	Serial.println(freeMemory());
 
 	init(&state);
 	initActions(&state);
