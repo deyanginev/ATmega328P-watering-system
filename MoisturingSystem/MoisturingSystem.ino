@@ -222,12 +222,13 @@ struct Sensor {
 };
 
 struct SystemState {
-	int scr = MS_HOME_SCREEN;
-	Sensor* s = nullptr;
-	bool p = false;
-	bool vn = false;
-	bool vm = false;
-	bool vf = false;
+	int scr = MS_HOME_SCREEN; // current screen
+	Sensor* s = nullptr;      // array of sensors and their state
+	bool p = false;			  // indicates whether the pump is active
+	bool sa = false;          // indicates whether the sensors are active
+	bool vn = false;          // indicates whether the near outlet is open
+	bool vm = false;          // indicates whether the mid outlet is open
+	bool vf = false;          // indicates whether the far outlet is open
 } state;
 
 
@@ -708,10 +709,12 @@ void stopNearOutlet(Action* a) {
 
 void startSensors(Action* a) {
 	digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
+	state.sa = true;
 }
 
 void stopSensors(Action* a) {
 	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
+	state.sa = false;
 }
 
 void tickSensors(Action* a) {
@@ -790,8 +793,8 @@ void tickSensors(Action* a) {
 
 // Display
 char* actvalues = (char*)malloc(sizeof(char) * 18);
-char* sensorp = (char*)malloc(sizeof(char) * 30);
-char* pumpm = (char*)malloc(sizeof(char) * 10);
+char* sensorValues = (char*)malloc(sizeof(char) * 25);
+char* pumpSensorState = (char*)malloc(sizeof(char) * 25);
 char* valvesm = (char*)malloc(sizeof(char) * 25);
 char* sinfo1 = (char*)malloc(sizeof(char) * 5);
 char* sinfo2 = (char*)malloc(sizeof(char) * 5);
@@ -811,10 +814,10 @@ void drawHomeScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
 	sprintf(actvalues, "PA: %d%% PD: %d%%", settings.apv, settings.dapv);
-	sprintf(sensorp, "N: %s M: %s F: %s", _hsResolveSensorInfo(sinfo1, &state.s[MS_SENSOR_NEAR]), _hsResolveSensorInfo(sinfo2, &state.s[MS_SENSOR_MID]), _hsResolveSensorInfo(sinfo3, &state.s[MS_SENSOR_FAR]));
+	sprintf(sensorValues, "N: %s M: %s F: %s", _hsResolveSensorInfo(sinfo1, &state.s[MS_SENSOR_NEAR]), _hsResolveSensorInfo(sinfo2, &state.s[MS_SENSOR_MID]), _hsResolveSensorInfo(sinfo3, &state.s[MS_SENSOR_FAR]));
 	sprintf(valvesm, "VN: %s VM: %s VF: %s", state.vn ? MS_ON_STRING : MS_OFF_STRING, state.vm ? MS_ON_STRING : MS_OFF_STRING, state.vf ? MS_ON_STRING : MS_OFF_STRING);
-	sprintf(pumpm, "PUMP: %s", state.p ? MS_ON_STRING : MS_OFF_STRING);
-	char* message[] = { actvalues, sensorp, valvesm, pumpm };
+	sprintf(pumpSensorState, "PUMP: %s SENSORS: %s", state.p ? MS_ON_STRING : MS_OFF_STRING, state.sa ? MS_ON_STRING : MS_OFF_STRING);
+	char* message[] = { actvalues, sensorValues, valvesm, pumpSensorState };
 	printAlignedTextStack(&mainCanvas, message, 4, 1, MS_H_CENTER, MS_H_CENTER | MS_V_TOP);
 	printAlignedText(&mainCanvas, "B1 - settings, B2 - stats", 1, (MS_H_CENTER | MS_V_BOTTOM));
 	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
@@ -862,8 +865,8 @@ void handleThresholdsSettingsScreen(int buttonValue) {
 
 #ifdef ARDUINO_ARCH_ESP32
 	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putInt(MS_APV_SETTING_KEY, settings.apv);
-	preferences.putInt(MS_DAPV_SETTING_KEY, settings.dapv);
+	preferences.putLong(MS_APV_SETTING_KEY, settings.apv);
+	preferences.putLong(MS_DAPV_SETTING_KEY, settings.dapv);
 	preferences.end();
 #endif
 }
@@ -889,14 +892,15 @@ void drawSensorSettingsScreen(Action* a) {
 		}
 		int16_t x, y;
 		uint16_t w, h;
-		sprintf(sensorp, "%d%%", (*s).p);
-		mainCanvas.getTextBounds(isActive ? sensorp : MS_OFF_STRING, 0, 0, &x, &y, &w, &h);
+		char sinfo[5];
+		sprintf(sinfo, "%d%%", (*s).p);
+		mainCanvas.getTextBounds(isActive ? sinfo : MS_OFF_STRING, 0, 0, &x, &y, &w, &h);
 		mainCanvas.setCursor(boxX - w / 2 + w % 2, boxY - h / 2 + h % 2 + FONT_BASELINE_CORRECTION_NORMAL / 2);
 		mainCanvas.setTextColor(isActive ? SSD1306_BLACK : SSD1306_WHITE);
 		mainCanvas.setTextSize(MS_FONT_TEXT_SIZE_NORMAL);
 
 		if (isActive) {
-			mainCanvas.print(sensorp);
+			mainCanvas.print(sinfo);
 		}
 		else {
 			mainCanvas.print(MS_OFF_STRING);
@@ -943,9 +947,9 @@ void handleSensorSettingsScreen(int buttonValue) {
 
 #ifdef ARDUINO_ARCH_ESP32
 	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putInt(MS_FAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_FAR].active);
-	preferences.putInt(MS_MID_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_MID].active);
-	preferences.putInt(MS_NEAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_NEAR].active);
+	preferences.putBool(MS_FAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_FAR].active);
+	preferences.putBool(MS_MID_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_MID].active);
+	preferences.putBool(MS_NEAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_NEAR].active);
 	preferences.end();
 #endif
 }
@@ -1002,7 +1006,7 @@ void drawSensorIntervalsSettingsScreen(Action* a) {
 	char* message[] = { pm1, pm2 };
 	printAlignedTextStack(&mainCanvas, message, 2, MS_FONT_TEXT_SIZE_NORMAL, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
 
-	printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
+	printAlignedText(&mainCanvas, "B1 - Back, B2-B3 - Edit", MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
 	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
 	display.display();
 }
@@ -1026,8 +1030,8 @@ void handleSensorIntervalsSettingsScreen(int buttonValue) {
 
 #ifdef ARDUINO_ARCH_ESP32
 	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putInt(MS_SENSOR_INTERVAL_PUMPING, settings.siw);
-	preferences.putInt(MS_SENSOR_INTERVAL_DRY, settings.sid);
+	preferences.putULong(MS_SENSOR_INTERVAL_PUMPING, settings.siw);
+	preferences.putULong(MS_SENSOR_INTERVAL_DRY, settings.sid);
 	preferences.end();
 #endif
 }
@@ -1065,8 +1069,8 @@ void handlePumpIntervalsSettingsScreen(int buttonValue) {
 
 #ifdef ARDUINO_ARCH_ESP32
 	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putInt(MS_PUMP_MAX_DURATION, settings.pd);
-	preferences.putInt(MS_PUMP_REACT_INT_DURATION, settings.pi);
+	preferences.putULong(MS_PUMP_MAX_DURATION, settings.pd);
+	preferences.putULong(MS_PUMP_REACT_INT_DURATION, settings.pi);
 	preferences.end();
 #endif
 }
@@ -1170,7 +1174,6 @@ void ms_init() {
 	int bs = 0;
 	bool init = false;
 	while (true) {
-		Serial.println("WAITING FOR VALUE:");
 		bs = readButton();
 		if (bs > BUTTON_1_LOW && bs < BUTTON_1_HIGH) {
 			init = false;
@@ -1237,7 +1240,7 @@ void ms_init() {
 #else
 		for (int i = 0; i < EEPROM.length(); i++) {
 			EEPROM.put(i, 0);
-		}
+	}
 #endif
 		display.clearDisplay();
 		showActionPromptScreen(&display, "B2", "get dry state");
@@ -1297,7 +1300,7 @@ void ms_init() {
 		}
 
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
-	}
+}
 #ifdef ARDUINO_ARCH_ESP32
 	preferences.end();
 #endif
@@ -1327,7 +1330,7 @@ void setup() {
 	Serial.begin(9600);
 
 	allocateMemPools();
-	
+
 	ms_init();
 
 	initActionsList();

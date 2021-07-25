@@ -1,12 +1,9 @@
-// 
-// 
+// A library for executing scheduled actions based on time and interval settings.
+// Author: Deyan Ginev, dginev@gmail.com
 // 
 
 #include "ActionsList.h"
 
-// end of structures
-
-// Queue
 
 int indexOfAction(ActionsList* list, Action* a) {
 	for (int i = 0; i < (*list).availableActionsCount; i++) {
