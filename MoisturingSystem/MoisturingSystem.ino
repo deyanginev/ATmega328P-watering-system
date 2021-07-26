@@ -18,6 +18,7 @@ const char* MS_OFF_STRING = "OFF";
 const char* MS_ON_STRING = "ON";
 const char* MS_BACK_BUTTON_PROMPT = "B1 - Back";
 const char* MS_READING_PROMPT_TEXT = "Reading...";
+const char* MS_STARTING_PROMPT_TEXT = "Starting...";
 
 const char* MS_FAR_ACTIVE_SETTING_KEY = "far-active";
 const char* MS_MID_ACTIVE_SETTING_KEY = "mid-active";
@@ -394,7 +395,7 @@ MSScreenBox printAlignedTextStack(
 }
 
 void drawStartingPromptScreen(Adafruit_SSD1306* display) {
-	char* prompt[] = { "Actions:", "B1 - start", "B2 - init" };
+	char* prompt[] = { "Actions:", "B1 - init", "B2 - start" };
 	GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&canvas);
 	printAlignedTextStack(&canvas, prompt, 3, DEFAULT_TEXT_SIZE, MS_H_LEFT, MS_H_CENTER | MS_V_CENTER);
@@ -452,18 +453,18 @@ void drawStartingValuesScreen(Adafruit_SSD1306* display) {
 void showTextCaptionScreen(Adafruit_SSD1306* display, const char* caption) {
 	GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&canvas);
-	printAlignedText(&canvas, caption, 2, MS_V_CENTER | MS_H_CENTER);
+	printAlignedText(&canvas, caption, MS_FONT_TEXT_SIZE_LARGE, MS_V_CENTER | MS_H_CENTER);
 	(*display).drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 	(*display).display();
 }
 
 void showActionPromptScreen(Adafruit_SSD1306* display, char* btn, char* action) {
-	char btnstr[10];
-	sprintf(btnstr, "Press %s to", btn);
+	char btnstr[15];
+	sprintf(btnstr, "Press %s", btn);
 	char* message[] = { btnstr, action };
 	GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&canvas);
-	printAlignedTextStack(&canvas, message, 3, DEFAULT_TEXT_SIZE, MS_H_CENTER, MS_H_CENTER | MS_V_CENTER);
+	printAlignedTextStack(&canvas, message, 2, DEFAULT_TEXT_SIZE, MS_H_CENTER, MS_H_CENTER | MS_V_CENTER);
 	(*display).drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 	(*display).display();
 }
@@ -1174,13 +1175,18 @@ void ms_init() {
 	int bs = 0;
 	bool init = false;
 	while (true) {
-		bs = readButton();
+		int i = 100;
+		while (i-- > 0) {
+			bs = readButton();
+			Serial.println(bs);
+		}
+
 		if (bs > BUTTON_1_LOW && bs < BUTTON_1_HIGH) {
-			init = false;
+			init = true;
 			break;
 		}
 		else if (bs > BUTTON_2_LOW && bs < BUTTON_2_HIGH) {
-			init = true;
+			init = false;
 			break;
 		}
 	}
@@ -1240,10 +1246,10 @@ void ms_init() {
 #else
 		for (int i = 0; i < EEPROM.length(); i++) {
 			EEPROM.put(i, 0);
-	}
+		}
 #endif
 		display.clearDisplay();
-		showActionPromptScreen(&display, "B2", "get dry state");
+		showActionPromptScreen(&display, "B2 for", "dry state");
 		int br = readButton();
 		while (!(br > BUTTON_2_LOW && br < BUTTON_2_HIGH)) {
 			br = readButton();
@@ -1267,7 +1273,7 @@ void ms_init() {
 		drawDryValuesScreen(&display);
 		delay(5000);
 		display.clearDisplay();
-		showActionPromptScreen(&display, "B2", "get wet state");
+		showActionPromptScreen(&display, "B2 for", "wet state");
 		br = readButton();
 		while (!(br > BUTTON_2_LOW && br < BUTTON_2_HIGH)) {
 			br = readButton();
@@ -1298,7 +1304,8 @@ void ms_init() {
 		while (!(br > BUTTON_2_LOW && br < BUTTON_2_HIGH)) {
 			br = readButton();
 		}
-
+		showTextCaptionScreen(&display, MS_STARTING_PROMPT_TEXT);
+		delay(2000);
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
 }
 #ifdef ARDUINO_ARCH_ESP32
