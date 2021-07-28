@@ -22,10 +22,11 @@ typedef enum ActionState {
 };
 
 typedef struct Action {
+	char* name;
 	Action* next = nullptr;
 	Action* prev = nullptr;
 	bool clear;
-	bool frozen = false; // once scheduled the action never expires
+	bool frozen = false; // once scheduled the action is never descheduled
 	bool stopRequested = false;
 	unsigned long ti = 0; // interval between executions
 	unsigned long td = 1000; // maximum duration interval
@@ -49,13 +50,7 @@ typedef struct ActionsList {
 	Action* availableActions = nullptr;
 };
 
-int indexOfAction(ActionsList* list, Action* a);
-Action* find(ActionsList* list, Action* item);
-void printList(ActionsList* list);
-Action* addListItem(ActionsList* list, Action* a);
-bool removeListItem(ActionsList* list, Action* item);
 bool requestStop(ActionsList* list, Action* a);
-bool shouldStop(Action* a, unsigned long time);
 bool descheduleAction(ActionsList* list, Action* a);
 bool scheduleAction(ActionsList* list, Action* a);
 void doQueueActions(ActionsList* executionList);
