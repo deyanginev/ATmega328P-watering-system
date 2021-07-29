@@ -10,10 +10,13 @@
 #include <WiFiClient.h>
 #include <soc/sens_reg.h>
 #include <soc/soc.h>
+#include <ArduinoJson.h>
 
 #ifdef __AVR_ATmega328P__ || __AVR_ATmega168__
 #define ARDUINO_ARCH_UNO
 #endif
+
+#define MS_SYSTEM_VERSION "0.2"
 
 #define FONT_BASELINE_CORRECTION_NORMAL 6
 #define FONT_BASELINE_CORRECTION_LARGE 12
@@ -41,16 +44,28 @@ const char* MS_NEAR_DRY_SETTING_KEY = "dry-near";
 const char* MS_APV_SETTING_KEY = "apv";
 const char* MS_DAPV_SETTING_KEY = "dapv";
 
-const char* MS_PUMP_MAX_DURATION = "p-max";
-const char* MS_PUMP_REACT_INT_DURATION = "p-react";
+const char* MS_PUMP_MAX_DURATION_SETTING_KEY = "p-max";
+const char* MS_PUMP_REACT_INT_DURATION_SETTING_KEY = "p-react";
 
-const char* MS_SENSOR_INTERVAL_DRY = "s-dry";
-const char* MS_SENSOR_INTERVAL_ON = "s-on";
-const char* MS_SENSOR_INTERVAL_PUMPING = "s-pumping";
+const char* MS_SENSOR_INTERVAL_DRY_SETTING_KEY = "s-dry";
+const char* MS_SENSOR_INTERVAL_ON_SETTING_KEY = "s-on";
+const char* MS_SENSOR_INTERVAL_PUMPING_SETTING_KEY = "s-pumping";
 
 const char* MS_WIFI_TOGGLE_SETTING_KEY = "wifi";
 
 // Mempools
+
+DynamicJsonDocument doc1(1024);
+DynamicJsonDocument doc2(1024);
+DynamicJsonDocument doc3(1024);
+DynamicJsonDocument doc4(1024);
+
+
+unsigned char stringPool1024b1[1024];
+unsigned char stringPool1024b2[1024];
+unsigned char stringPool1024b3[1024];
+unsigned char stringPool1024b4[1024];
+
 char stringPool50b1[50];
 char stringPool50b2[50];
 char stringPool50b3[50];
@@ -261,6 +276,7 @@ struct WiFIState {
 	char* ssid = "Mirwais";
 	char* password = "importantpassword";
 	int state = MS_WIFI_STOPPED;
+	bool isActive = false;
 } wifi;
 
 struct MSysSettings {
@@ -269,8 +285,8 @@ struct MSysSettings {
 	unsigned long sd = 1000; // 1 second max duration for sensor activation;
 	unsigned long pi = 60000 * 10; // 10 minutes between pump activations
 	unsigned long pd = 60000 * 2; // 2 minutes max pump on duration
-	long apv = 50; // % humidity threshold for pump activation
-	long dapv = 85; // % humidity threshold for pump deactivation
+	int apv = 50; // % humidity threshold for pump activation
+	int dapv = 85; // % humidity threshold for pump deactivation
 } settings;
 
 struct Sensor {
@@ -468,11 +484,12 @@ MSScreenBox printAlignedTextStack(
 	return { boxX, boxY, boxWidth, boxHeight };;
 }
 
-void drawStartingPromptScreen(Adafruit_SSD1306* display) {
-	char* prompt[] = { "Actions:", "B1 - init", "B2 - start" };
+void drawStartingPromptScreen(Adafruit_SSD1306* display, int remaining) {
+	sprintf(stringPool10b1, "(B2 in: %ds)", remaining);
+	char* prompt[] = { "Actions:", "B1 - init", "B2 - start", stringPool10b1 };
 	GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&canvas);
-	printAlignedTextStack(&canvas, prompt, 3, DEFAULT_TEXT_SIZE, MS_H_LEFT, MS_H_CENTER | MS_V_CENTER);
+	printAlignedTextStack(&canvas, prompt, 4, DEFAULT_TEXT_SIZE, MS_H_LEFT, MS_H_CENTER | MS_V_CENTER);
 	(*display).drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
 	(*display).display();
 }
@@ -541,7 +558,8 @@ void showActionPromptScreen(Adafruit_SSD1306* display, char* btn, char* action) 
 }
 
 void drawSplashScreen(Adafruit_SSD1306* display) {
-	char* texts[] = { "Irrigation", "System", "Version: 0.1" };
+	sprintf(stringPool10b1, "Version: %s", MS_SYSTEM_VERSION);
+	char* texts[] = { "Irrigation", "System", stringPool10b1 };
 	GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&canvas);
 	canvas.drawRoundRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 10, SSD1306_WHITE);
@@ -672,6 +690,8 @@ char* _resolveWiFIStatusString(char* target, int status) {
 
 void connectWiFi() {
 	WiFi.mode(WIFI_STA);
+	WiFi.setAutoConnect(true);
+	WiFi.persistent(true);
 	WiFi.setHostname("MS-System");
 	WiFi.begin(wifi.ssid, wifi.password);
 }
@@ -687,11 +707,9 @@ void updateWiFiStatus() {
 		break;
 	case WL_CONNECT_FAILED:
 		wifi.state = MS_WIFI_FAILED;
-		WiFi.reconnect();
 		break;
 	case WL_CONNECTION_LOST:
 		wifi.state = MS_WIFI_LOST;
-		WiFi.reconnect();
 		break;
 	case WL_IDLE_STATUS:
 		wifi.state = MS_WIFI_IDLE;
@@ -708,13 +726,115 @@ void updateWiFiStatus() {
 	}
 }
 
+bool _requestAuth() {
+	if (!server.authenticate("ms-system-admin", "importantpassword")) {
+		server.requestAuthentication();
+		return false;
+	}
+	return true;
+}
+
+void _generateStatus(DynamicJsonDocument* doc) {
+	(*doc)["status"] = "OK";
+
+	(*doc)["thresholds"]["apv_perc"] = settings.apv;
+	(*doc)["thresholds"]["dapv_perc"] = settings.dapv;
+
+	(*doc)["pump"]["active"] = state.p;
+	(*doc)["pump"]["di_sec"] = settings.pd / 1000;
+	(*doc)["pump"]["offtime_sec"] = settings.pi / 1000;
+
+	for (int i = 0; i < SENSORS_COUNT; i++) {
+		Sensor* cur = &state.s[i];
+		bool isActive = (*cur).active;
+		(*doc)["sensors"][(*cur).name]["active"] = (*cur).active;
+		(*doc)["sensors"]["di_sec"] = settings.sid / 1000;
+		(*doc)["sensors"]["p_di_sec"] = settings.siw / 1000;
+		(*doc)["sensors"]["ontime_sec"] = availableActions[SENSORS_ACTION].td / 1000;
+
+		if (isActive) {
+			(*doc)["sensors"][(*cur).name]["hum_perc"] = (*cur).p;
+			(*doc)["sensors"][(*cur).name]["dry_val"] = (*cur).dry;
+			(*doc)["sensors"][(*cur).name]["wet_val"] = (*cur).wet;
+			(*doc)["sensors"][(*cur).name]["cur_val"] = (*cur).value;
+		}
+	}
+}
+
 void handleStatus() {
-	server.send(200, "application/json", "{\"status\":\"OK\"}");
+	_generateStatus(&doc1);
+	serializeJson(doc1, stringPool1024b1);
+	server.send(200, "application/json", (char*)stringPool1024b1);
+	doc1.clear();
+	memset(stringPool1024b1, 0, 1024);
+}
+
+void handleModifySetting() {
+	if (_requestAuth()) {
+
+		String body = server.arg("plain");
+		body.getBytes(stringPool1024b1, 1024, 0);
+		deserializeJson(doc1, stringPool1024b1);
+
+		if (doc1.containsKey(MS_APV_SETTING_KEY)) {
+			settings.apv = max(0, (int)min((int)doc1[MS_APV_SETTING_KEY], settings.dapv - 5));
+		}
+
+		if (doc1.containsKey(MS_DAPV_SETTING_KEY)) {
+			settings.dapv = max(settings.apv + 5, min((int)doc1[MS_DAPV_SETTING_KEY], 100));
+		}
+
+		if (doc1.containsKey(MS_PUMP_MAX_DURATION_SETTING_KEY)) {
+			settings.pd = min(5 * 60000, max((int)doc1[MS_PUMP_MAX_DURATION_SETTING_KEY], 60000));
+		}
+
+		if (doc1.containsKey(MS_PUMP_REACT_INT_DURATION_SETTING_KEY)) {
+			settings.pi = min(20 * 60000, max((int)doc1[MS_PUMP_REACT_INT_DURATION_SETTING_KEY], 60000));
+		}
+
+		if (doc1.containsKey(MS_NEAR_ACTIVE_SETTING_KEY)) {
+			state.s[MS_SENSOR_NEAR].active = (doc1[MS_NEAR_ACTIVE_SETTING_KEY] == true ? true : false);
+		}
+
+		if (doc1.containsKey(MS_MID_ACTIVE_SETTING_KEY)) {
+			state.s[MS_SENSOR_MID].active = (doc1[MS_MID_ACTIVE_SETTING_KEY] == true ? true : false);
+		}
+
+		if (doc1.containsKey(MS_FAR_ACTIVE_SETTING_KEY)) {
+			state.s[MS_SENSOR_FAR].active = (doc1[MS_FAR_ACTIVE_SETTING_KEY] == true ? true : false);
+		}
+
+		_generateStatus(&doc2);
+		serializeJson(doc2, stringPool1024b2);
+		server.send(200, "application/json", (char*)stringPool1024b2);
+
+		doc1.clear();
+		doc2.clear();
+		memset(stringPool1024b1, 0, 1024);
+		memset(stringPool1024b2, 0, 1024);
+
+		storeSetPreferences();
+	}
+}
+
+void handleCommandRestart() {
+	if (_requestAuth()) {
+		server.send(200, "text/plain", "Restaring...");
+		delay(2000);
+#ifdef ARDUINO_ARCH_ESP32
+		ESP.restart();
+#endif
+	}
 }
 
 
+
+
 void setupWebServer() {
-	server.on("/status", HTTP_GET, &handleStatus);
+	server.on("/api/status", HTTP_GET, &handleStatus);
+	server.on("/api/modify/setting", HTTP_POST, &handleModifySetting);
+	server.on("/api/command/restart", HTTP_POST, &handleCommandRestart);
+	server.onNotFound([]() {server.send(404, "text/plain", "Sorry ;)"); });
 	server.begin();
 }
 
@@ -725,6 +845,11 @@ void startWifi(Action* a) {
 
 void tickWifi(Action* a) {
 	updateWiFiStatus();
+
+	if (wifi.state == MS_WIFI_IDLE) {
+		WiFi.reconnect();
+	}
+
 	server.handleClient();
 }
 
@@ -881,12 +1006,7 @@ void handleThresholdsSettingsScreen(int buttonValue) {
 
 	}
 
-#ifdef ARDUINO_ARCH_ESP32
-	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putLong(MS_APV_SETTING_KEY, settings.apv);
-	preferences.putLong(MS_DAPV_SETTING_KEY, settings.dapv);
-	preferences.end();
-#endif
+	storeSetPreferences();
 }
 
 void drawSensorSettingsScreen(Action* a) {
@@ -962,13 +1082,7 @@ void handleSensorSettingsScreen(int buttonValue) {
 
 	}
 
-#ifdef ARDUINO_ARCH_ESP32
-	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putBool(MS_FAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_FAR].active);
-	preferences.putBool(MS_MID_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_MID].active);
-	preferences.putBool(MS_NEAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_NEAR].active);
-	preferences.end();
-#endif
+	storeSetPreferences();
 }
 
 void drawWIFIToggleScreen(Action* a) {
@@ -1008,32 +1122,21 @@ void drawWIFIToggleScreen(Action* a) {
 }
 
 void handleWIFIToggleScreen(int buttonValue) {
-#ifdef ARDUINO_ARCH_ESP32
-	preferences.begin(MS_PREFERENCES_ID, false);
-#endif
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
 		state.scr = MS_CONNECTIVITY_SETTINGS_SCREEN;
 	}
 	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
 		if (availableActions[WIFI_ACTION].state == MS_RUNNING) {
 			requestStop(&executionList, &availableActions[WIFI_ACTION]);
-#ifdef ARDUINO_ARCH_ESP32
-			preferences.putBool(MS_WIFI_TOGGLE_SETTING_KEY, false);
-#endif
+			wifi.isActive = false;
 		}
 		else if (availableActions[WIFI_ACTION].state == MS_NON_ACTIVE) {
 			scheduleAction(&executionList, &availableActions[WIFI_ACTION]);
-#ifdef ARDUINO_ARCH_ESP32
-			preferences.putBool(MS_WIFI_TOGGLE_SETTING_KEY, true);
-#endif
+			wifi.isActive = true;
 		}
-
-
 	}
-#ifdef ARDUINO_ARCH_ESP32
-	preferences.end();
-#endif
 
+	storeSetPreferences();
 }
 
 void drawConnectivityInfoScreen(Action* a) {
@@ -1238,13 +1341,7 @@ void handleSensorIntervalsSettingsScreen(int buttonValue) {
 		(*td) = nv;
 	}
 
-#ifdef ARDUINO_ARCH_ESP32
-	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putULong(MS_SENSOR_INTERVAL_PUMPING, settings.siw);
-	preferences.putULong(MS_SENSOR_INTERVAL_DRY, settings.sid);
-	preferences.putULong(MS_SENSOR_INTERVAL_ON, availableActions[SENSORS_ACTION].td);
-	preferences.end();
-#endif
+	storeSetPreferences();
 }
 
 void drawPumpIntervalsSettingsScreen(Action* a) {
@@ -1277,12 +1374,8 @@ void handlePumpIntervalsSettingsScreen(int buttonValue) {
 		settings.pi = nv;
 	}
 
-#ifdef ARDUINO_ARCH_ESP32
-	preferences.begin(MS_PREFERENCES_ID, false);
-	preferences.putULong(MS_PUMP_MAX_DURATION, settings.pd);
-	preferences.putULong(MS_PUMP_REACT_INT_DURATION, settings.pi);
-	preferences.end();
-#endif
+
+	storeSetPreferences();
 }
 
 void drawIntervalsSettingsScreen(Action* a) {
@@ -1518,10 +1611,70 @@ void populateActions() {
 }
 
 int readButton() {
+	return fixedAnalogRead(BUTTONS_PIN);
+}
 
-	int res = fixedAnalogRead(BUTTONS_PIN);
-	Serial.println(res);
-	return res;
+void storeSetPreferences() {
+	preferences.begin(MS_PREFERENCES_ID, false);
+
+	preferences.putBool(MS_FAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_FAR].active);
+	preferences.putBool(MS_MID_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_MID].active);
+	preferences.putBool(MS_NEAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_NEAR].active);
+
+	preferences.putInt(MS_APV_SETTING_KEY, settings.apv);
+	preferences.putInt(MS_DAPV_SETTING_KEY, settings.dapv);
+
+	preferences.putBool(MS_WIFI_TOGGLE_SETTING_KEY, wifi.isActive);
+
+	preferences.putULong(MS_SENSOR_INTERVAL_PUMPING_SETTING_KEY, settings.siw);
+	preferences.putULong(MS_SENSOR_INTERVAL_DRY_SETTING_KEY, settings.sid);
+	preferences.putULong(MS_SENSOR_INTERVAL_ON_SETTING_KEY, availableActions[SENSORS_ACTION].td);
+
+	preferences.putULong(MS_PUMP_MAX_DURATION_SETTING_KEY, settings.pd);
+	preferences.putULong(MS_PUMP_REACT_INT_DURATION_SETTING_KEY, settings.pi);
+
+	preferences.end();
+}
+
+void readStoredPreferences() {
+	preferences.begin(MS_PREFERENCES_ID, false);
+
+	state.s[MS_SENSOR_NEAR].dry = preferences.getInt(MS_NEAR_DRY_SETTING_KEY);
+	state.s[MS_SENSOR_MID].dry = preferences.getInt(MS_MID_DRY_SETTING_KEY);
+	state.s[MS_SENSOR_FAR].dry = preferences.getInt(MS_FAR_DRY_SETTING_KEY);
+
+	state.s[MS_SENSOR_NEAR].wet = preferences.getInt(MS_NEAR_WET_SETTING_KEY);
+	state.s[MS_SENSOR_MID].wet = preferences.getInt(MS_MID_WET_SETTING_KEY);
+	state.s[MS_SENSOR_FAR].wet = preferences.getInt(MS_FAR_WET_SETTING_KEY);
+
+	state.s[MS_SENSOR_NEAR].active = preferences.getBool(MS_NEAR_ACTIVE_SETTING_KEY, true);
+	state.s[MS_SENSOR_MID].active = preferences.getBool(MS_MID_ACTIVE_SETTING_KEY, true);
+	state.s[MS_SENSOR_FAR].active = preferences.getBool(MS_FAR_ACTIVE_SETTING_KEY, true);
+
+	settings.apv = preferences.getInt(MS_APV_SETTING_KEY, settings.apv);
+	settings.dapv = preferences.getInt(MS_DAPV_SETTING_KEY, settings.dapv);
+
+	settings.pd = preferences.getULong(MS_PUMP_MAX_DURATION_SETTING_KEY, settings.pd);
+	settings.pi = preferences.getULong(MS_PUMP_REACT_INT_DURATION_SETTING_KEY, settings.pi);
+
+	settings.sid = preferences.getULong(MS_SENSOR_INTERVAL_DRY_SETTING_KEY, settings.sid);
+	settings.siw = preferences.getULong(MS_SENSOR_INTERVAL_PUMPING_SETTING_KEY, settings.siw);
+	settings.sd = preferences.getULong(MS_SENSOR_INTERVAL_ON_SETTING_KEY, settings.sd);
+	wifi.isActive = preferences.getBool(MS_WIFI_TOGGLE_SETTING_KEY, wifi.isActive);
+
+	availableActions[OUTLET_NEAR_ACTION].ti = settings.pi;
+	availableActions[OUTLET_NEAR_ACTION].td = settings.pd;
+
+	availableActions[OUTLET_MID_ACTION].ti = settings.pi;
+	availableActions[OUTLET_MID_ACTION].td = settings.pd;
+
+	availableActions[OUTLET_FAR_ACTION].ti = settings.pi;
+	availableActions[OUTLET_FAR_ACTION].td = settings.pd;
+
+	availableActions[SENSORS_ACTION].ti = settings.siw;
+	availableActions[SENSORS_ACTION].td = settings.sd;
+
+	preferences.end();
 }
 
 void setupInitialState() {
@@ -1541,6 +1694,9 @@ void setupInitialState() {
 		// schedule sensors and UI actions
 		scheduleAction(&executionList, &availableActions[SENSORS_ACTION]);
 		scheduleAction(&executionList, &availableActions[DRAW_UI_ACTION]);
+		if (wifi.isActive) {
+			scheduleAction(&executionList, &availableActions[WIFI_ACTION]);
+		}
 	}
 	else {
 #ifdef DEBUG
@@ -1574,16 +1730,17 @@ void ms_init() {
 	initDisplay(&display);
 	drawSplashScreen(&display);
 	delay(5000);
-	drawStartingPromptScreen(&display);
 
-	int bs = 0;
+
 	bool init = false;
+	int seconds = 20;
 	while (true) {
-		int i = 100;
-		while (i-- > 0) {
-			bs = readButton();
-			Serial.println(bs);
+		drawStartingPromptScreen(&display, seconds);
+		delay(1000);
+		if (seconds-- == 0) {
+			break;
 		}
+		int bs = readButton();
 
 		if (bs > BUTTON_1_LOW && bs < BUTTON_1_HIGH) {
 			init = true;
@@ -1594,9 +1751,7 @@ void ms_init() {
 			break;
 		}
 	}
-#ifdef ARDUINO_ARCH_ESP32
-	preferences.begin(MS_PREFERENCES_ID, false);
-#endif
+
 	sprintf(state.s[MS_SENSOR_NEAR].name, "near");
 	sprintf(state.s[MS_SENSOR_MID].name, "mid");
 	sprintf(state.s[MS_SENSOR_FAR].name, "far");
@@ -1604,31 +1759,8 @@ void ms_init() {
 	if (!init) {
 
 #ifdef ARDUINO_ARCH_ESP32
-		state.s[MS_SENSOR_NEAR].dry = preferences.getInt(MS_NEAR_DRY_SETTING_KEY);
-		state.s[MS_SENSOR_MID].dry = preferences.getInt(MS_MID_DRY_SETTING_KEY);
-		state.s[MS_SENSOR_FAR].dry = preferences.getInt(MS_FAR_DRY_SETTING_KEY);
+		readStoredPreferences();
 
-		state.s[MS_SENSOR_NEAR].wet = preferences.getInt(MS_NEAR_WET_SETTING_KEY);
-		state.s[MS_SENSOR_MID].wet = preferences.getInt(MS_MID_WET_SETTING_KEY);
-		state.s[MS_SENSOR_FAR].wet = preferences.getInt(MS_FAR_WET_SETTING_KEY);
-
-		state.s[MS_SENSOR_NEAR].active = preferences.getBool(MS_NEAR_ACTIVE_SETTING_KEY, true);
-		state.s[MS_SENSOR_MID].active = preferences.getBool(MS_MID_ACTIVE_SETTING_KEY, true);
-		state.s[MS_SENSOR_FAR].active = preferences.getBool(MS_FAR_ACTIVE_SETTING_KEY, true);
-
-		settings.apv = preferences.getInt(MS_APV_SETTING_KEY, settings.apv);
-		settings.dapv = preferences.getInt(MS_DAPV_SETTING_KEY, settings.dapv);
-
-		settings.pd = preferences.getULong(MS_PUMP_MAX_DURATION, settings.pd);
-		settings.pi = preferences.getULong(MS_PUMP_REACT_INT_DURATION, settings.pi);
-
-		settings.sid = preferences.getULong(MS_SENSOR_INTERVAL_DRY, settings.sid);
-		settings.siw = preferences.getULong(MS_SENSOR_INTERVAL_PUMPING, settings.siw);
-		availableActions[SENSORS_ACTION].td = preferences.getULong(MS_SENSOR_INTERVAL_ON, availableActions[SENSORS_ACTION].td);
-		wifi.state = (preferences.getBool(MS_WIFI_TOGGLE_SETTING_KEY, false) ? MS_WIFI_DISCONNECTED : MS_WIFI_STOPPED);
-		if (wifi.state != MS_WIFI_STOPPED) {
-			scheduleAction(&executionList, &availableActions[WIFI_ACTION]);
-		}
 #else
 		int nd = 0, md = 0, fd = 0, nw = 0, mw = 0, fw = 0;
 		EEPROM.get(0, nd);
@@ -1652,11 +1784,12 @@ void ms_init() {
 	else {
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
 #ifdef ARDUINO_ARCH_ESP32
+		preferences.begin(MS_PREFERENCES_ID, false);
 		preferences.clear();
 #else
 		for (int i = 0; i < EEPROM.length(); i++) {
 			EEPROM.put(i, 0);
-		}
+	}
 #endif
 		display.clearDisplay();
 		showActionPromptScreen(&display, "B2 for", "dry state");
@@ -1717,11 +1850,10 @@ void ms_init() {
 		showTextCaptionScreen(&display, MS_STARTING_PROMPT_TEXT);
 		delay(2000);
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
-	}
 #ifdef ARDUINO_ARCH_ESP32
-	preferences.end();
+		preferences.end();
 #endif
-
+}
 }
 
 // Fix for WIFI + analogRead from ADC2 issue
@@ -1775,9 +1907,9 @@ void setup() {
 
 	allocateMemPools();
 
-	setupInitialState();
-
 	ms_init();
+
+	setupInitialState();
 }
 
 void loop() {

@@ -5,10 +5,14 @@ VisualStudioVersion = 16.0.31205.134
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MoisturingSystem", "MoisturingSystem.vcxproj", "{C5F80730-F44F-4478-BDAE-6634EFC2CA88}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ArduinoJson-6.18.3", "Libraries\ArduinoJson\6.18.3\ArduinoJson\ArduinoJson-6.18.3.vcxitems", "{7DA9852A-DB20-4225-8F5F-E1023383EB89}"
+EndProject
 Global
 	GlobalSection(SharedMSBuildProjectFiles) = preSolution
+		Libraries\ArduinoJson\6.18.3\ArduinoJson\ArduinoJson-6.18.3.vcxitems*{7da9852a-db20-4225-8f5f-e1023383eb89}*SharedItemsImports = 9
 		Libraries\Adafruit_GFX_Library\1.10.10\Adafruit_GFX_Library\Adafruit_GFX_Library-1.10.10.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
 		Libraries\Adafruit_SSD1306\2.4.6\Adafruit_SSD1306\Adafruit_SSD1306-2.4.6.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
+		Libraries\ArduinoJson\6.18.3\ArduinoJson\ArduinoJson-6.18.3.vcxitems*{c5f80730-f44f-4478-bdae-6634efc2ca88}*SharedItemsImports = 4
 	EndGlobalSection
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x86 = Debug|x86
