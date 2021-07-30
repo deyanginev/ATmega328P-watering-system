@@ -41,8 +41,14 @@ const char* MS_FAR_DRY_SETTING_KEY = "dry-far";
 const char* MS_MID_DRY_SETTING_KEY = "dry-mid";
 const char* MS_NEAR_DRY_SETTING_KEY = "dry-near";
 
-const char* MS_APV_SETTING_KEY = "apv";
-const char* MS_DAPV_SETTING_KEY = "dapv";
+const char* MS_APV_NEAR_SETTING_KEY = "n-apv";
+const char* MS_DAPV_NEAR_SETTING_KEY = "n-dapv";
+
+const char* MS_APV_MID_SETTING_KEY = "m-apv";
+const char* MS_DAPV_MID_SETTING_KEY = "m-dapv";
+
+const char* MS_APV_FAR_SETTING_KEY = "f-apv";
+const char* MS_DAPV_FAR_SETTING_KEY = "f-dapv";
 
 const char* MS_PUMP_MAX_DURATION_SETTING_KEY = "p-max";
 const char* MS_PUMP_REACT_INT_DURATION_SETTING_KEY = "p-react";
@@ -110,7 +116,7 @@ char stringPool5b4[5];
 #define MS_BUTTON3 3
 #define MS_BUTTON4 4
 
-#define SCREENS_COUNT 12
+#define SCREENS_COUNT 13
 
 #define MS_HOME_SCREEN 0
 #define MS_SETTINGS_SCREEN 1
@@ -124,6 +130,7 @@ char stringPool5b4[5];
 #define MS_CONNECTIVITY_SETTINGS_SCREEN 9
 #define MS_CONNECTIVITY_INFO_SCREEN 10
 #define MS_WIFI_TOGGLE_SCREEN 11
+#define MS_THRESHOLDS_SETTINGS_MENU_SCREEN 12
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -279,6 +286,10 @@ struct WiFIState {
 	bool isActive = false;
 } wifi;
 
+struct SensorsThresholdEditState {
+	int sensorCode = -1;
+} sensorThEditState;
+
 struct MSysSettings {
 	unsigned long siw = 5000; // 5 seconds for sensor interval while watering
 	unsigned long sid = 60000 * 1; // 1 minute for sensor interval while in stand by
@@ -295,6 +306,8 @@ struct Sensor {
 	int value; // current reading
 	int ai; // action index
 	int p; // humidity percentage
+	int apv;
+	int dapv;
 	bool active = true;
 	char name[4];
 };
@@ -571,23 +584,18 @@ void drawSplashScreen(Adafruit_SSD1306* display) {
 // end of Display
 
 
-void extractMedianPinValueForProperty(int delayInterval, int* near, int* mid, int* far) {
-	int farV = 0;
-	int midV = 0;
-	int nearV = 0;
+void extractMedianPinValueForProperty(int delayInterval, int* target, int sensorPin) {
+	int value = 0;
+	int iterations = 10;
 
-	for (int i = 0; i < 10; i++) {
-		farV += fixedAnalogRead(PIN_FAR);
-		midV += fixedAnalogRead(PIN_MID);
-		nearV += fixedAnalogRead(PIN_NEAR);
+	for (int i = 0; i < iterations; i++) {
+		value += fixedAnalogRead(sensorPin);
 		if (delayInterval > 0) {
 			delay(delayInterval);
 		}
 	}
 
-	(*far) = (int)(farV / 10);
-	(*mid) = (int)(midV / 10);
-	(*near) = (int)(nearV / 10);
+	(*target) = (int)(value / iterations);
 }
 
 // End of Helpers
@@ -736,10 +744,7 @@ bool _requestAuth() {
 
 void _generateStatus(DynamicJsonDocument* doc) {
 	(*doc)["status"] = "OK";
-
-	(*doc)["thresholds"]["apv_perc"] = settings.apv;
-	(*doc)["thresholds"]["dapv_perc"] = settings.dapv;
-
+	unsigned long time = millis();
 	(*doc)["pump"]["active"] = state.p;
 	(*doc)["pump"]["di_sec"] = settings.pd / 1000;
 	(*doc)["pump"]["offtime_sec"] = settings.pi / 1000;
@@ -751,13 +756,18 @@ void _generateStatus(DynamicJsonDocument* doc) {
 		(*doc)["sensors"]["di_sec"] = settings.sid / 1000;
 		(*doc)["sensors"]["p_di_sec"] = settings.siw / 1000;
 		(*doc)["sensors"]["ontime_sec"] = availableActions[SENSORS_ACTION].td / 1000;
+		(*doc)["sensors"]["on_before_mins"] = (int)(availableActions[SENSORS_ACTION].lst / 60000);
 
 		if (isActive) {
 			(*doc)["sensors"][(*cur).name]["hum_perc"] = (*cur).p;
-			(*doc)["sensors"][(*cur).name]["dry_val"] = (*cur).dry;
-			(*doc)["sensors"][(*cur).name]["wet_val"] = (*cur).wet;
-			(*doc)["sensors"][(*cur).name]["cur_val"] = (*cur).value;
+			(*doc)["sensors"][(*cur).name]["readings"]["dry_val"] = (*cur).dry;
+			(*doc)["sensors"][(*cur).name]["readings"]["wet_val"] = (*cur).wet;
+			(*doc)["sensors"][(*cur).name]["readings"]["cur_val"] = (*cur).value;
+			(*doc)["sensors"][(*cur).name]["on_before_mins"] = (int)(availableActions[(*cur).ai].lst / 60000);
 		}
+
+		(*doc)["sensors"][(*cur).name]["thresholds"]["apv"] = (*cur).apv;
+		(*doc)["sensors"][(*cur).name]["thresholds"]["dapv"] = (*cur).dapv;
 	}
 }
 
@@ -776,12 +786,28 @@ void handleModifySetting() {
 		body.getBytes(stringPool1024b1, 1024, 0);
 		deserializeJson(doc1, stringPool1024b1);
 
-		if (doc1.containsKey(MS_APV_SETTING_KEY)) {
-			settings.apv = max(0, (int)min((int)doc1[MS_APV_SETTING_KEY], settings.dapv - 5));
+		if (doc1.containsKey(MS_APV_NEAR_SETTING_KEY)) {
+			state.s[MS_SENSOR_NEAR].apv = max(0, (int)min((int)doc1[MS_APV_NEAR_SETTING_KEY], state.s[MS_SENSOR_NEAR].dapv - 5));
 		}
 
-		if (doc1.containsKey(MS_DAPV_SETTING_KEY)) {
-			settings.dapv = max(settings.apv + 5, min((int)doc1[MS_DAPV_SETTING_KEY], 100));
+		if (doc1.containsKey(MS_DAPV_NEAR_SETTING_KEY)) {
+			state.s[MS_SENSOR_NEAR].dapv = max(state.s[MS_SENSOR_NEAR].apv + 5, min((int)doc1[MS_DAPV_NEAR_SETTING_KEY], 100));
+		}
+
+		if (doc1.containsKey(MS_APV_MID_SETTING_KEY)) {
+			state.s[MS_SENSOR_MID].apv = max(0, (int)min((int)doc1[MS_APV_MID_SETTING_KEY], state.s[MS_SENSOR_MID].dapv - 5));
+		}
+
+		if (doc1.containsKey(MS_DAPV_MID_SETTING_KEY)) {
+			state.s[MS_SENSOR_MID].dapv = max(state.s[MS_SENSOR_MID].apv + 5, min((int)doc1[MS_DAPV_MID_SETTING_KEY], 100));
+		}
+
+		if (doc1.containsKey(MS_APV_FAR_SETTING_KEY)) {
+			state.s[MS_SENSOR_FAR].apv = max(0, (int)min((int)doc1[MS_APV_FAR_SETTING_KEY], state.s[MS_SENSOR_FAR].dapv - 5));
+		}
+
+		if (doc1.containsKey(MS_DAPV_FAR_SETTING_KEY)) {
+			state.s[MS_SENSOR_FAR].dapv = max(state.s[MS_SENSOR_FAR].apv + 5, min((int)doc1[MS_DAPV_FAR_SETTING_KEY], 100));
 		}
 
 		if (doc1.containsKey(MS_PUMP_MAX_DURATION_SETTING_KEY)) {
@@ -876,7 +902,9 @@ void stopSensors(Action* a) {
 
 void tickSensors(Action* a) {
 
-	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_NEAR].value, &state.s[MS_SENSOR_MID].value, &state.s[MS_SENSOR_FAR].value);
+	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_NEAR].value, PIN_NEAR);
+	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_MID].value, PIN_MID);
+	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_FAR].value, PIN_FAR);
 
 	bool activate = false;
 	Action** acandidates = (Action**)malloc(sizeof(Action*) * SENSORS_COUNT);
@@ -893,7 +921,7 @@ void tickSensors(Action* a) {
 		float mp = ((d - _min(_max(v, w), d)) / dwd) * 100.0;
 		(*se).p = (int)mp;
 
-		activate = (*se).active && (bool)((long)mp < (state.p ? settings.dapv : settings.apv));
+		activate = (*se).active && (bool)((long)mp < (state.p ? (*se).dapv : (*se).apv));
 
 		acandidates[i] = nullptr;
 		if (activate && ca != nullptr) {
@@ -959,13 +987,12 @@ const char* _hsResolveSensorInfo(char* target, Sensor* s) {
 void drawHomeScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
-	sprintf(stringPool30b1, "PA: %d%% PD: %d%%", settings.apv, settings.dapv);
-	sprintf(stringPool30b2, "N: %s M: %s F: %s", _hsResolveSensorInfo(stringPool5b1, &state.s[MS_SENSOR_NEAR]), _hsResolveSensorInfo(stringPool5b2, &state.s[MS_SENSOR_MID]), _hsResolveSensorInfo(stringPool5b3, &state.s[MS_SENSOR_FAR]));
-	sprintf(stringPool30b3, "VN: %s VM: %s VF: %s", state.vn ? MS_ON_STRING : MS_OFF_STRING, state.vm ? MS_ON_STRING : MS_OFF_STRING, state.vf ? MS_ON_STRING : MS_OFF_STRING);
-	sprintf(stringPool30b4, "PUMP: %s SENSORS: %s", state.p ? MS_ON_STRING : MS_OFF_STRING, state.sa ? MS_ON_STRING : MS_OFF_STRING);
+	sprintf(stringPool30b1, "N: %s M: %s F: %s", _hsResolveSensorInfo(stringPool5b1, &state.s[MS_SENSOR_NEAR]), _hsResolveSensorInfo(stringPool5b2, &state.s[MS_SENSOR_MID]), _hsResolveSensorInfo(stringPool5b3, &state.s[MS_SENSOR_FAR]));
+	sprintf(stringPool30b2, "VN: %s VM: %s VF: %s", state.vn ? MS_ON_STRING : MS_OFF_STRING, state.vm ? MS_ON_STRING : MS_OFF_STRING, state.vf ? MS_ON_STRING : MS_OFF_STRING);
+	sprintf(stringPool30b3, "PUMP: %s SENSORS: %s", state.p ? MS_ON_STRING : MS_OFF_STRING, state.sa ? MS_ON_STRING : MS_OFF_STRING);
 	sprintf(stringPool20b1, "WIFI: %s", _resolveWiFIStatusString(stringPool20b2, wifi.state));
-	char* message[] = { stringPool30b1, stringPool30b2, stringPool30b3, stringPool30b4, stringPool20b1 };
-	printAlignedTextStack(&mainCanvas, message, 5, 1, MS_H_CENTER, MS_H_CENTER | MS_V_TOP);
+	char* message[] = { stringPool30b1, stringPool30b2, stringPool30b3, stringPool20b1 };
+	printAlignedTextStack(&mainCanvas, message, 4, 1, MS_H_CENTER, MS_H_CENTER | MS_V_TOP);
 	printAlignedText(&mainCanvas, "B1 - menu", 1, (MS_H_CENTER | MS_V_BOTTOM));
 	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
 	display.display();
@@ -977,13 +1004,47 @@ void handleHomeScreen(int buttonValue) {
 	}
 }
 
+void drawThresholdsSettingsMenuScreen(Action* a) {
+	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
+	initCanvas(&mainCanvas);
+	char* text[] = { "B2 - Edit NEAR", "B3 - Edit MID", "B4 - Edit FAR" };
+	printAlignedTextStack(&mainCanvas, text, 3, 1, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+	printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
+	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
+	display.display();
+}
+
+void handleThresholdsSettingsMenuScreen(int buttonValue) {
+
+	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+		state.scr = MS_SETTINGS_SCREEN;
+		sensorThEditState.sensorCode = -1;
+	}
+	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+		sensorThEditState.sensorCode = MS_SENSOR_NEAR;
+		state.scr = MS_THRESHOLDS_SETTINGS_SCREEN;
+	}
+	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
+		sensorThEditState.sensorCode = MS_SENSOR_MID;
+		state.scr = MS_THRESHOLDS_SETTINGS_SCREEN;
+	}
+	else if (buttonValue > BUTTON_4_LOW && buttonValue < BUTTON_4_HIGH) {
+		sensorThEditState.sensorCode = MS_SENSOR_FAR;
+		state.scr = MS_THRESHOLDS_SETTINGS_SCREEN;
+	}
+}
+
 void drawThresholdsSettingsScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
-	sprintf(stringPool20b1, "APV: %d%%", settings.apv);
-	sprintf(stringPool20b2, "DAPV: %d%%", settings.dapv);
-	char* message[] = { stringPool20b1, stringPool20b2 };
-	printAlignedTextStack(&mainCanvas, message, 2, MS_FONT_TEXT_SIZE_LARGE, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+
+	Sensor* current = &state.s[sensorThEditState.sensorCode];
+
+	sprintf(stringPool20b3, "Editing: %s", (*current).name);
+	sprintf(stringPool20b1, "APV: %d%%", (*current).apv);
+	sprintf(stringPool20b2, "DAPV: %d%%", (*current).dapv);
+	char* message[] = { stringPool20b3, stringPool20b1, stringPool20b2 };
+	printAlignedTextStack(&mainCanvas, message, 3, MS_FONT_TEXT_SIZE_LARGE, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
 
 	printAlignedText(&mainCanvas, "B1 - Back, B2-B3 - edit", MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
 	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
@@ -991,18 +1052,18 @@ void drawThresholdsSettingsScreen(Action* a) {
 }
 
 void handleThresholdsSettingsScreen(int buttonValue) {
-
+	Sensor* current = &state.s[sensorThEditState.sensorCode];
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
-		state.scr = MS_SETTINGS_SCREEN;
+		state.scr = MS_THRESHOLDS_SETTINGS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
-		int upperLimit = settings.dapv - 5;
-		int nv = _min((settings.apv + 5) % settings.dapv, upperLimit);
-		settings.apv = nv;
+		int upperLimit = (*current).dapv - 5;
+		int nv = _min(((*current).apv + 5) % (*current).dapv, upperLimit);
+		(*current).apv = nv;
 	}
 	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
-		int nv = _max(_min((settings.dapv + 5) % 105, 100), settings.apv + 5);
-		settings.dapv = nv;
+		int nv = _max(_min(((*current).dapv + 5) % 105, 100), (*current).apv + 5);
+		(*current).dapv = nv;
 
 	}
 
@@ -1298,7 +1359,7 @@ void handleSettingsScreen(int buttonValue) {
 		state.scr = MS_SENSOR_SETTINGS_SCREEN;
 	}
 	else if (buttonValue > BUTTON_4_LOW && buttonValue < BUTTON_4_HIGH) {
-		state.scr = MS_THRESHOLDS_SETTINGS_SCREEN;
+		state.scr = MS_THRESHOLDS_SETTINGS_MENU_SCREEN;
 	}
 }
 
@@ -1461,6 +1522,9 @@ void populateScreens() {
 	availableScreens[MS_THRESHOLDS_SETTINGS_SCREEN].drawUI = &drawThresholdsSettingsScreen;
 	availableScreens[MS_THRESHOLDS_SETTINGS_SCREEN].handleButtons = &handleThresholdsSettingsScreen;
 
+	availableScreens[MS_THRESHOLDS_SETTINGS_MENU_SCREEN].drawUI = &drawThresholdsSettingsMenuScreen;
+	availableScreens[MS_THRESHOLDS_SETTINGS_MENU_SCREEN].handleButtons = &handleThresholdsSettingsMenuScreen;
+
 	availableScreens[MS_INTERVALS_SETTINGS_SCREEN].drawUI = &drawIntervalsSettingsScreen;
 	availableScreens[MS_INTERVALS_SETTINGS_SCREEN].handleButtons = &handleIntervalsSettingsScreen;
 
@@ -1621,8 +1685,14 @@ void storeSetPreferences() {
 	preferences.putBool(MS_MID_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_MID].active);
 	preferences.putBool(MS_NEAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_NEAR].active);
 
-	preferences.putInt(MS_APV_SETTING_KEY, settings.apv);
-	preferences.putInt(MS_DAPV_SETTING_KEY, settings.dapv);
+	preferences.putInt(MS_APV_NEAR_SETTING_KEY, state.s[MS_SENSOR_NEAR].apv);
+	preferences.putInt(MS_DAPV_NEAR_SETTING_KEY, state.s[MS_SENSOR_NEAR].dapv);
+
+	preferences.putInt(MS_APV_MID_SETTING_KEY, state.s[MS_SENSOR_MID].apv);
+	preferences.putInt(MS_DAPV_MID_SETTING_KEY, state.s[MS_SENSOR_MID].dapv);
+
+	preferences.putInt(MS_APV_FAR_SETTING_KEY, state.s[MS_SENSOR_FAR].apv);
+	preferences.putInt(MS_DAPV_FAR_SETTING_KEY, state.s[MS_SENSOR_FAR].dapv);
 
 	preferences.putBool(MS_WIFI_TOGGLE_SETTING_KEY, wifi.isActive);
 
@@ -1651,8 +1721,15 @@ void readStoredPreferences() {
 	state.s[MS_SENSOR_MID].active = preferences.getBool(MS_MID_ACTIVE_SETTING_KEY, true);
 	state.s[MS_SENSOR_FAR].active = preferences.getBool(MS_FAR_ACTIVE_SETTING_KEY, true);
 
-	settings.apv = preferences.getInt(MS_APV_SETTING_KEY, settings.apv);
-	settings.dapv = preferences.getInt(MS_DAPV_SETTING_KEY, settings.dapv);
+
+	state.s[MS_SENSOR_NEAR].apv = preferences.getInt(MS_APV_NEAR_SETTING_KEY, 50);
+	state.s[MS_SENSOR_NEAR].dapv = preferences.getInt(MS_DAPV_NEAR_SETTING_KEY, 85);
+
+	state.s[MS_SENSOR_MID].apv = preferences.getInt(MS_APV_MID_SETTING_KEY, 50);
+	state.s[MS_SENSOR_MID].dapv = preferences.getInt(MS_DAPV_MID_SETTING_KEY, 85);
+
+	state.s[MS_SENSOR_FAR].apv = preferences.getInt(MS_APV_FAR_SETTING_KEY, 50);
+	state.s[MS_SENSOR_FAR].dapv = preferences.getInt(MS_DAPV_FAR_SETTING_KEY, 85);
 
 	settings.pd = preferences.getULong(MS_PUMP_MAX_DURATION_SETTING_KEY, settings.pd);
 	settings.pi = preferences.getULong(MS_PUMP_REACT_INT_DURATION_SETTING_KEY, settings.pi);
@@ -1789,7 +1866,7 @@ void ms_init() {
 #else
 		for (int i = 0; i < EEPROM.length(); i++) {
 			EEPROM.put(i, 0);
-	}
+		}
 #endif
 		display.clearDisplay();
 		showActionPromptScreen(&display, "B2 for", "dry state");
@@ -1801,7 +1878,9 @@ void ms_init() {
 		showTextCaptionScreen(&display, MS_READING_PROMPT_TEXT);
 
 		// waiting for completely wet values
-		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_NEAR].dry, &state.s[MS_SENSOR_MID].dry, &state.s[MS_SENSOR_FAR].dry);
+		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_NEAR].dry, PIN_NEAR);
+		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_MID].dry, PIN_MID);
+		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_FAR].dry, PIN_FAR);
 #ifdef ARDUINO_ARCH_ESP32
 		preferences.putInt(MS_NEAR_DRY_SETTING_KEY, state.s[MS_SENSOR_NEAR].dry);
 		preferences.putInt(MS_MID_DRY_SETTING_KEY, state.s[MS_SENSOR_MID].dry);
@@ -1825,7 +1904,9 @@ void ms_init() {
 		showTextCaptionScreen(&display, MS_READING_PROMPT_TEXT);
 
 		// waiting for completely wet values
-		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_NEAR].wet, &state.s[MS_SENSOR_MID].wet, &state.s[MS_SENSOR_FAR].wet);
+		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_NEAR].wet, PIN_NEAR);
+		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_MID].wet, PIN_MID);
+		extractMedianPinValueForProperty(1000, &state.s[MS_SENSOR_FAR].wet, PIN_FAR);
 #ifdef ARDUINO_ARCH_ESP32
 		preferences.putInt(MS_NEAR_WET_SETTING_KEY, state.s[MS_SENSOR_NEAR].wet);
 		preferences.putInt(MS_MID_WET_SETTING_KEY, state.s[MS_SENSOR_MID].wet);
@@ -1853,7 +1934,7 @@ void ms_init() {
 #ifdef ARDUINO_ARCH_ESP32
 		preferences.end();
 #endif
-}
+	}
 }
 
 // Fix for WIFI + analogRead from ADC2 issue
