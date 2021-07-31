@@ -239,16 +239,17 @@ Preferences preferences;
 #define MS_SENSOR_MID  1
 #define MS_SENSOR_NEAR  2
 
-#define ACTIONS_COUNT 7
+#define ACTIONS_COUNT 8
 
 // action defines
-#define SENSORS_ACTION 0
+#define READ_SENSORS_ACTION 0
 #define OUTLET_FAR_ACTION 1
 #define OUTLET_MID_ACTION 2
 #define OUTLET_NEAR_ACTION 3
 #define PUMP_ACTION 4
 #define DRAW_UI_ACTION 5
 #define WIFI_ACTION 6
+#define INTERPRET_SENSOR_DATA_ACTION 7
 
 
 // end of action defines
@@ -291,9 +292,9 @@ struct SensorsThresholdEditState {
 } sensorThEditState;
 
 struct MSysSettings {
-	unsigned long siw = 5000; // 5 seconds for sensor interval while watering
+	unsigned long siw = 15000; // 15 seconds for sensor interval while watering
 	unsigned long sid = 60000 * 1; // 1 minute for sensor interval while in stand by
-	unsigned long sd = 1000; // 1 second max duration for sensor activation;
+	unsigned long sd = 10000; // 10 second? max duration for sensor activation;
 	unsigned long pi = 60000 * 10; // 10 minutes between pump activations
 	unsigned long pd = 60000 * 2; // 2 minutes max pump on duration
 	int apv = 50; // % humidity threshold for pump activation
@@ -756,8 +757,8 @@ void _generateStatus(DynamicJsonDocument* doc) {
 	(*doc)["pump"]["offtime_sec"] = settings.pi / 1000;
 	(*doc)["sensors"]["di_sec"] = settings.sid / 1000;
 	(*doc)["sensors"]["p_di_sec"] = settings.siw / 1000;
-	(*doc)["sensors"]["ontime_sec"] = availableActions[SENSORS_ACTION].td / 1000;
-	(*doc)["sensors"]["on_before_mins"] = (int)(_calculateOnBeforeTime(time, &availableActions[SENSORS_ACTION]) / 60000);
+	(*doc)["sensors"]["ontime_sec"] = availableActions[READ_SENSORS_ACTION].td / 1000;
+	(*doc)["sensors"]["on_before_mins"] = (int)(_calculateOnBeforeTime(time, &availableActions[READ_SENSORS_ACTION]) / 60000);
 
 	for (int i = 0; i < SENSORS_COUNT; i++) {
 		Sensor* cur = &state.s[i];
@@ -895,22 +896,13 @@ void stopWifi(Action* a) {
 
 // Sensors
 
-void startSensors(Action* a) {
-	digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
-	state.sa = true;
+void startInterpret(Action* a) {
 }
 
-void stopSensors(Action* a) {
-	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
-	state.sa = false;
+void stopInterpret(Action* a) {
 }
 
-void tickSensors(Action* a) {
-
-	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_NEAR].value, PIN_NEAR);
-	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_MID].value, PIN_MID);
-	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_FAR].value, PIN_FAR);
-
+void tickInterpret(Action* a) {
 	bool activate = false;
 	Action** acandidates = (Action**)malloc(sizeof(Action*) * SENSORS_COUNT);
 	int pc = 0;
@@ -926,7 +918,7 @@ void tickSensors(Action* a) {
 		float mp = ((d - _min(_max(v, w), d)) / dwd) * 100.0;
 		(*se).p = (int)mp;
 
-		activate = (*se).active && (bool)((long)mp < (state.p ? (*se).dapv : (*se).apv));
+		activate = (*se).active && (bool)((long)mp < ((*ca).state == MS_RUNNING ? (*se).dapv : (*se).apv));
 
 		acandidates[i] = nullptr;
 		if (activate && ca != nullptr) {
@@ -970,9 +962,28 @@ void tickSensors(Action* a) {
 			scheduleAction(&executionList, ts);
 		}
 	}
+	bool isPumpOpen = availableActions[PUMP_ACTION].state == MS_CHILD_RUNNING || availableActions[PUMP_ACTION].state == MS_CHILD_SCHEDULED;
+	availableActions[READ_SENSORS_ACTION].ti = isPumpOpen ? settings.siw : settings.sid;
 
-	(*a).ti = availableActions[PUMP_ACTION].state == MS_CHILD_RUNNING ? settings.siw : settings.sid;
 	free(acandidates);
+}
+
+void startSensors(Action* a) {
+	digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
+	state.sa = true;
+}
+
+void stopSensors(Action* a) {
+	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
+	state.sa = false;
+	scheduleAction(&executionList, &availableActions[INTERPRET_SENSOR_DATA_ACTION]);
+}
+
+void tickSensors(Action* a) {
+
+	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_NEAR].value, PIN_NEAR);
+	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_MID].value, PIN_MID);
+	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_FAR].value, PIN_FAR);
 }
 
 //end of sensors
@@ -1374,7 +1385,7 @@ void drawSensorIntervalsSettingsScreen(Action* a) {
 
 	sprintf(stringPool20b1, "Pump off: %d s", settings.sid / 1000);
 	sprintf(stringPool20b2, "Pump on: %d s", settings.siw / 1000);
-	sprintf(stringPool20b3, "ON duration: %d s", availableActions[SENSORS_ACTION].td / 1000);
+	sprintf(stringPool20b3, "ON duration: %d s", availableActions[READ_SENSORS_ACTION].td / 1000);
 	char* message[] = { stringPool20b1, stringPool20b2, stringPool20b3 };
 	printAlignedTextStack(&mainCanvas, message, 3, MS_FONT_TEXT_SIZE_NORMAL, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
 
@@ -1402,7 +1413,7 @@ void handleSensorIntervalsSettingsScreen(int buttonValue) {
 	else if (buttonValue > BUTTON_4_LOW && buttonValue < BUTTON_4_HIGH) {
 		int step = 1000;
 		int upperLimit = 15 * step;
-		unsigned long* td = &availableActions[SENSORS_ACTION].td;
+		unsigned long* td = &availableActions[READ_SENSORS_ACTION].td;
 		int nv = _max(((*td) + step) % (upperLimit + step), step);
 		(*td) = nv;
 	}
@@ -1574,21 +1585,38 @@ void populateActions() {
 	availableActions[WIFI_ACTION].st = 0;
 	availableActions[WIFI_ACTION].name = "wifi";
 
+	// interpret sensor data action
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].tick = &tickInterpret;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].frozen = false;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].stopRequested = false;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].start = &startInterpret;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].stop = &stopInterpret;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].ti = 1;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].td = 1;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].to = 0;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].clear = false;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].state = MS_NON_ACTIVE;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].child = nullptr;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].lst = 0;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].st = 0;
+	availableActions[INTERPRET_SENSOR_DATA_ACTION].name = "interpret";
+
+
 	// read sensors action
-	availableActions[SENSORS_ACTION].tick = &tickSensors;
-	availableActions[SENSORS_ACTION].frozen = true;
-	availableActions[SENSORS_ACTION].stopRequested = false;
-	availableActions[SENSORS_ACTION].start = &startSensors;
-	availableActions[SENSORS_ACTION].stop = &stopSensors;
-	availableActions[SENSORS_ACTION].ti = settings.siw;
-	availableActions[SENSORS_ACTION].td = settings.sd;
-	availableActions[SENSORS_ACTION].to = 200;
-	availableActions[SENSORS_ACTION].clear = false;
-	availableActions[SENSORS_ACTION].state = MS_NON_ACTIVE;
-	availableActions[SENSORS_ACTION].child = nullptr;
-	availableActions[SENSORS_ACTION].lst = 0;
-	availableActions[SENSORS_ACTION].st = 0;
-	availableActions[SENSORS_ACTION].name = "sensors";
+	availableActions[READ_SENSORS_ACTION].tick = &tickSensors;
+	availableActions[READ_SENSORS_ACTION].frozen = true;
+	availableActions[READ_SENSORS_ACTION].stopRequested = false;
+	availableActions[READ_SENSORS_ACTION].start = &startSensors;
+	availableActions[READ_SENSORS_ACTION].stop = &stopSensors;
+	availableActions[READ_SENSORS_ACTION].ti = settings.siw;
+	availableActions[READ_SENSORS_ACTION].td = settings.sd;
+	availableActions[READ_SENSORS_ACTION].to = 200;
+	availableActions[READ_SENSORS_ACTION].clear = false;
+	availableActions[READ_SENSORS_ACTION].state = MS_NON_ACTIVE;
+	availableActions[READ_SENSORS_ACTION].child = nullptr;
+	availableActions[READ_SENSORS_ACTION].lst = 0;
+	availableActions[READ_SENSORS_ACTION].st = 0;
+	availableActions[READ_SENSORS_ACTION].name = "sensors";
 
 	// open far valve action
 	availableActions[OUTLET_FAR_ACTION].tick = &tickFarOutlet;
@@ -1703,7 +1731,7 @@ void storeSetPreferences() {
 
 	preferences.putULong(MS_SENSOR_INTERVAL_PUMPING_SETTING_KEY, settings.siw);
 	preferences.putULong(MS_SENSOR_INTERVAL_DRY_SETTING_KEY, settings.sid);
-	preferences.putULong(MS_SENSOR_INTERVAL_ON_SETTING_KEY, availableActions[SENSORS_ACTION].td);
+	preferences.putULong(MS_SENSOR_INTERVAL_ON_SETTING_KEY, availableActions[READ_SENSORS_ACTION].td);
 
 	preferences.putULong(MS_PUMP_MAX_DURATION_SETTING_KEY, settings.pd);
 	preferences.putULong(MS_PUMP_REACT_INT_DURATION_SETTING_KEY, settings.pi);
@@ -1753,8 +1781,8 @@ void readStoredPreferences() {
 	availableActions[OUTLET_FAR_ACTION].ti = settings.pi;
 	availableActions[OUTLET_FAR_ACTION].td = settings.pd;
 
-	availableActions[SENSORS_ACTION].ti = settings.siw;
-	availableActions[SENSORS_ACTION].td = settings.sd;
+	availableActions[READ_SENSORS_ACTION].ti = settings.siw;
+	availableActions[READ_SENSORS_ACTION].td = settings.sd;
 
 	preferences.end();
 }
@@ -1774,7 +1802,7 @@ void setupInitialState() {
 		state.scr = MS_HOME_SCREEN;
 
 		// schedule sensors and UI actions
-		scheduleAction(&executionList, &availableActions[SENSORS_ACTION]);
+		scheduleAction(&executionList, &availableActions[READ_SENSORS_ACTION]);
 		scheduleAction(&executionList, &availableActions[DRAW_UI_ACTION]);
 		if (wifi.isActive) {
 			scheduleAction(&executionList, &availableActions[WIFI_ACTION]);

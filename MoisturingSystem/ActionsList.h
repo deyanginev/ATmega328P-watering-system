@@ -18,7 +18,8 @@ typedef enum ActionState {
 	MS_PENDING = 2,
 	MS_RUNNING = 3,
 	MS_CHILD_RUNNING = 4,
-	MS_CHILD_PENDING = 5
+	MS_CHILD_PENDING = 5,
+	MS_CHILD_SCHEDULED = 6
 };
 
 typedef struct Action {

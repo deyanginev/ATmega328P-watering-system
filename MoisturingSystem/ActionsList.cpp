@@ -167,6 +167,12 @@ bool descheduleAction(ActionsList* list, Action* a) {
 	if (found != nullptr && (*found).state != MS_RUNNING) {
 		(*found).state = MS_NON_ACTIVE;
 
+		Action* child = (*found).child;
+		while (child != nullptr) {
+			(*child).state = MS_NON_ACTIVE;
+			child = (*child).child;
+		}
+
 		removeListItem(list, found);
 
 		return true;
@@ -187,6 +193,11 @@ bool scheduleAction(ActionsList* list, Action* a) {
 
 	if (a != nullptr) {
 		(*a).state = MS_SCHEDULED;
+		Action* child = (*a).child;
+		while (child != nullptr) {
+			(*child).state = MS_CHILD_SCHEDULED;
+			child = (*child).child;
+		}
 		addListItem(list, a);
 		return true;
 	}
@@ -224,6 +235,13 @@ void doQueueActions(ActionsList* executionList) {
 			}
 		}
 		else {
+
+			if ((*action).state == MS_RUNNING) {
+				if (time - (*action).st > (*action).to) {
+					(*action).tick(action);
+				}
+			}
+
 			if (shouldStop(action, time)) {
 
 #ifdef DEBUG
@@ -248,13 +266,6 @@ void doQueueActions(ActionsList* executionList) {
 				(*action).state = MS_PENDING;
 				(*action).clear = !(*action).frozen;
 				(*action).stopRequested = false;
-			}
-			else {
-				if ((*action).state == MS_RUNNING) {
-					if (time - (*action).st > (*action).to) {
-						(*action).tick(action);
-					}
-				}
 			}
 		}
 
