@@ -742,28 +742,33 @@ bool _requestAuth() {
 	return true;
 }
 
+unsigned long  _calculateOnBeforeTime(unsigned long curTime, Action* a) {
+	int lastStopTime = (*a).lst;
+	int onBeforeTime = lastStopTime > 0 ? curTime - lastStopTime : 0;
+	return onBeforeTime;
+}
+
 void _generateStatus(DynamicJsonDocument* doc) {
 	(*doc)["status"] = "OK";
 	unsigned long time = millis();
 	(*doc)["pump"]["active"] = state.p;
 	(*doc)["pump"]["di_sec"] = settings.pd / 1000;
 	(*doc)["pump"]["offtime_sec"] = settings.pi / 1000;
+	(*doc)["sensors"]["di_sec"] = settings.sid / 1000;
+	(*doc)["sensors"]["p_di_sec"] = settings.siw / 1000;
+	(*doc)["sensors"]["ontime_sec"] = availableActions[SENSORS_ACTION].td / 1000;
+	(*doc)["sensors"]["on_before_mins"] = (int)(_calculateOnBeforeTime(time, &availableActions[SENSORS_ACTION]) / 60000);
 
 	for (int i = 0; i < SENSORS_COUNT; i++) {
 		Sensor* cur = &state.s[i];
 		bool isActive = (*cur).active;
 		(*doc)["sensors"][(*cur).name]["active"] = (*cur).active;
-		(*doc)["sensors"]["di_sec"] = settings.sid / 1000;
-		(*doc)["sensors"]["p_di_sec"] = settings.siw / 1000;
-		(*doc)["sensors"]["ontime_sec"] = availableActions[SENSORS_ACTION].td / 1000;
-		(*doc)["sensors"]["on_before_mins"] = (int)(availableActions[SENSORS_ACTION].lst / 60000);
-
 		if (isActive) {
 			(*doc)["sensors"][(*cur).name]["hum_perc"] = (*cur).p;
 			(*doc)["sensors"][(*cur).name]["readings"]["dry_val"] = (*cur).dry;
 			(*doc)["sensors"][(*cur).name]["readings"]["wet_val"] = (*cur).wet;
 			(*doc)["sensors"][(*cur).name]["readings"]["cur_val"] = (*cur).value;
-			(*doc)["sensors"][(*cur).name]["on_before_mins"] = (int)(availableActions[(*cur).ai].lst / 60000);
+			(*doc)["sensors"][(*cur).name]["on_before_mins"] = (int)(_calculateOnBeforeTime(time, &availableActions[(*cur).ai]) / 60000);
 		}
 
 		(*doc)["sensors"][(*cur).name]["thresholds"]["apv"] = (*cur).apv;
@@ -1955,6 +1960,9 @@ void restoreADC2ConfigRegisters() {
 	//WRITE_PERI_REG(SENS_SAR_MEAS_START2_REG, reg_c);
 }
 
+// Read the following threads for more information:
+// https://github.com/espressif/arduino-esp32/issues/102
+// https://github.com/espressif/arduino-esp32/issues/440
 int fixedAnalogRead(int pin) {
 	restoreADC2ConfigRegisters();
 	SET_PERI_REG_MASK(SENS_SAR_READ_CTRL2_REG, SENS_SAR2_DATA_INV);
