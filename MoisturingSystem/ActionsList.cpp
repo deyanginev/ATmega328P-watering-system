@@ -4,6 +4,11 @@
 
 #include "ActionsList.h"
 
+Action** executionArray;
+
+int initActionsList(int actionsCount) {
+	executionArray = (Action**)calloc(actionsCount, sizeof(Action*));
+}
 
 int indexOfAction(ActionsList* list, Action* a) {
 	for (int i = 0; i < (*list).availableActionsCount; i++) {
@@ -206,12 +211,24 @@ bool scheduleAction(ActionsList* list, Action* a) {
 }
 
 void doQueueActions(ActionsList* executionList) {
+
+
+	// Create a list of Action pointers 
+	// for all actions currently to be processed
+	// to avoid modifying the linked-list while
+	// iterating over it
+	int k = 0;
 	Action* action = (*executionList).first;
+	while (action != nullptr) {
+		executionArray[k++] = action;
+		action = (*action).next;
+	}
+
 	unsigned long time = millis();
 	int count = (*executionList).count;
 
-	int i = 0;
-	while (action != nullptr) {
+	for (int i = 0; i < count; i++) {
+		Action* action = executionArray[i];
 		if (canStart(action, time)) {
 #ifdef DEBUG
 			Serial.print(F("Starting: "));
@@ -269,7 +286,6 @@ void doQueueActions(ActionsList* executionList) {
 			}
 		}
 
-		action = (*action).next;
 	}
 
 	// Iterate over the available actions and stop the

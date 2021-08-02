@@ -55,5 +55,6 @@ bool requestStop(ActionsList* list, Action* a);
 bool descheduleAction(ActionsList* list, Action* a);
 bool scheduleAction(ActionsList* list, Action* a);
 void doQueueActions(ActionsList* executionList);
+int initActionsList(int actionsCount);
 
 

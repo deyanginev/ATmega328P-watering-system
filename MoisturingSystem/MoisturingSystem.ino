@@ -16,7 +16,7 @@
 #define ARDUINO_ARCH_UNO
 #endif
 
-#define MS_SYSTEM_VERSION "0.2"
+#define MS_SYSTEM_VERSION "0.21"
 
 #define FONT_BASELINE_CORRECTION_NORMAL 6
 #define FONT_BASELINE_CORRECTION_LARGE 12
@@ -858,8 +858,6 @@ void handleCommandRestart() {
 #endif
 	}
 }
-
-
 
 
 void setupWebServer() {
@@ -1960,14 +1958,14 @@ void ms_init() {
 		br = readButton();
 		while (!(br > BUTTON_2_LOW && br < BUTTON_2_HIGH)) {
 			br = readButton();
-		}
+	}
 		showTextCaptionScreen(&display, MS_STARTING_PROMPT_TEXT);
 		delay(2000);
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
 #ifdef ARDUINO_ARCH_ESP32
 		preferences.end();
 #endif
-	}
+}
 }
 
 // Fix for WIFI + analogRead from ADC2 issue
@@ -2023,7 +2021,7 @@ void setup() {
 	Serial.begin(9600);
 
 	allocateMemPools();
-
+	initActionsList(ACTIONS_COUNT);
 	ms_init();
 
 	setupInitialState();
