@@ -30,8 +30,8 @@ typedef struct Action {
 	bool frozen = false; // once scheduled the action is never descheduled
 	bool stopRequested = false;
 	unsigned long ti = 0; // interval between executions
-	unsigned long td = 1000; // maximum duration interval
-	unsigned long lst = -1; // last stop time
+	unsigned long td = 1000; // maximum duration interval; '0' makes the action execute forever.
+	unsigned long lst = 0; // last stop time
 	unsigned long to = 0; // first tick offset from start
 	unsigned long st = 0; // last start time
 	ActionState state = MS_NON_ACTIVE;

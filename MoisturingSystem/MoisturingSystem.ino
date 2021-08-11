@@ -16,7 +16,7 @@
 #define ARDUINO_ARCH_UNO
 #endif
 
-#define MS_SYSTEM_VERSION "0.21"
+#define MS_SYSTEM_VERSION "0.22"
 
 #define FONT_BASELINE_CORRECTION_NORMAL 6
 #define FONT_BASELINE_CORRECTION_LARGE 12
@@ -28,6 +28,8 @@ const char* MS_ON_STRING = "ON";
 const char* MS_BACK_BUTTON_PROMPT = "B1 - Back";
 const char* MS_READING_PROMPT_TEXT = "Reading...";
 const char* MS_STARTING_PROMPT_TEXT = "Starting...";
+
+const char* MS_IRRIGATE_UNTIL_EXPIRY_KEY = "iue";
 
 const char* MS_FAR_ACTIVE_SETTING_KEY = "far-active";
 const char* MS_MID_ACTIVE_SETTING_KEY = "mid-active";
@@ -297,8 +299,7 @@ struct MSysSettings {
 	unsigned long sd = 10000; // 10 second? max duration for sensor activation;
 	unsigned long pi = 60000 * 10; // 10 minutes between pump activations
 	unsigned long pd = 60000 * 2; // 2 minutes max pump on duration
-	int apv = 50; // % humidity threshold for pump activation
-	int dapv = 85; // % humidity threshold for pump deactivation
+	bool iue = false; //Irrigate until action expiry; false if pump is deactivated once a sensor returns signal; true otherwise;
 } settings;
 
 struct Sensor {
@@ -539,18 +540,7 @@ void drawStartingValuesScreen(Adafruit_SSD1306* display) {
 	delay(5000);
 	drawWetValuesScreen(display);
 	delay(5000);
-
 	(*display).clearDisplay();
-
-	sprintf(stringPool20b1, "APV: %d%%", settings.apv);
-	sprintf(stringPool20b2, "DAPV: %d%%", settings.dapv);
-
-	char* message[] = { "Thresholds:", stringPool20b1, stringPool20b2 };
-	GFXcanvas16 canvas(SCREEN_WIDTH, SCREEN_HEIGHT);
-	initCanvas(&canvas);
-	printAlignedTextStack(&canvas, message, 3, DEFAULT_TEXT_SIZE, MS_H_LEFT, MS_H_CENTER | MS_V_CENTER);
-	(*display).drawRGBBitmap(0, 0, canvas.getBuffer(), SCREEN_WIDTH, SCREEN_HEIGHT);
-	(*display).display();
 }
 
 void showTextCaptionScreen(Adafruit_SSD1306* display, const char* caption) {
@@ -755,6 +745,7 @@ void _generateStatus(DynamicJsonDocument* doc) {
 	(*doc)["pump"]["active"] = state.p;
 	(*doc)["pump"]["di_sec"] = settings.pd / 1000;
 	(*doc)["pump"]["offtime_sec"] = settings.pi / 1000;
+	(*doc)["pump"]["iue"] = settings.iue;
 	(*doc)["sensors"]["di_sec"] = settings.sid / 1000;
 	(*doc)["sensors"]["p_di_sec"] = settings.siw / 1000;
 	(*doc)["sensors"]["ontime_sec"] = availableActions[READ_SENSORS_ACTION].td / 1000;
@@ -836,6 +827,10 @@ void handleModifySetting() {
 			state.s[MS_SENSOR_FAR].active = (doc1[MS_FAR_ACTIVE_SETTING_KEY] == true ? true : false);
 		}
 
+		if (doc1.containsKey(MS_IRRIGATE_UNTIL_EXPIRY_KEY)) {
+			settings.iue = doc1[MS_IRRIGATE_UNTIL_EXPIRY_KEY] == true ? true : false;
+		}
+
 		_generateStatus(&doc2);
 		serializeJson(doc2, stringPool1024b2);
 		server.send(200, "application/json", (char*)stringPool1024b2);
@@ -903,67 +898,69 @@ void stopInterpret(Action* a) {
 void tickInterpret(Action* a) {
 	bool activate = false;
 	Action** acandidates = (Action**)malloc(sizeof(Action*) * SENSORS_COUNT);
-	int pc = 0;
-	int ac = 0;
-	for (int i = 0; i < SENSORS_COUNT; i++) {
-		Sensor* se = &state.s[i];
-		Action* ca = &availableActions[(*se).ai];
-		float v = (float)(*se).value;
-		float d = (float)(*se).dry;
-		float w = (float)(*se).wet;
-		float dwd = _max(0.00001, d - w);
+	if (acandidates != nullptr) {
+		int pc = 0;
+		int ac = 0;
+		for (int i = 0; i < SENSORS_COUNT; i++) {
+			Sensor* se = &state.s[i];
+			Action* ca = &availableActions[(*se).ai];
+			float v = (float)(*se).value;
+			float d = (float)(*se).dry;
+			float w = (float)(*se).wet;
+			float dwd = _max(0.00001, d - w);
 
-		float mp = ((d - _min(_max(v, w), d)) / dwd) * 100.0;
-		(*se).p = (int)mp;
+			float mp = ((d - _min(_max(v, w), d)) / dwd) * 100.0;
+			(*se).p = (int)mp;
 
-		activate = (*se).active && (bool)((long)mp < ((*ca).state == MS_RUNNING ? (*se).dapv : (*se).apv));
+			activate = (*se).active && (bool)((long)mp < ((*ca).state == MS_RUNNING ? (*se).dapv : (*se).apv));
 
-		acandidates[i] = nullptr;
-		if (activate && ca != nullptr) {
-			ac++;
-			if ((*ca).state == MS_NON_ACTIVE) {
-				acandidates[i] = ca;
-				pc++;
+			acandidates[i] = nullptr;
+			if (activate && ca != nullptr) {
+				ac++;
+				if ((*ca).state == MS_NON_ACTIVE) {
+					acandidates[i] = ca;
+					pc++;
+				}
+				else if ((*ca).state == MS_PENDING) {
+					requestStop(&executionList, ca);
+				}
 			}
-			else if ((*ca).state == MS_PENDING) {
+			else if (!settings.iue && ca != nullptr) {
+				// Stop the action for which activate is false
 				requestStop(&executionList, ca);
 			}
 		}
-		else if (ca != nullptr) {
-			// Stop the action for which activate is false
-			requestStop(&executionList, ca);
-		}
-	}
 
-	// if the available outlets are equal to the 
-	// ones needed to be activated - we select the 
-	// one that was activated the earliest
-	if (pc > 0 && pc == ac) {
+		// if the available outlets are equal to the 
+		// ones needed to be activated - we select the 
+		// one that was activated the earliest
+		if (pc > 0 && pc == ac) {
 
-		Action* ts = nullptr;
-		for (int i = 0; i < SENSORS_COUNT; i++) {
-			Action* c = acandidates[i];
+			Action* ts = nullptr;
+			for (int i = 0; i < SENSORS_COUNT; i++) {
+				Action* c = acandidates[i];
 
-			if (c != nullptr) {
-				if (ts != nullptr) {
-					if ((*c).st < (*ts).st) {
+				if (c != nullptr) {
+					if (ts != nullptr) {
+						if ((*c).st < (*ts).st) {
+							ts = c;
+						}
+					}
+					else {
 						ts = c;
 					}
 				}
-				else {
-					ts = c;
-				}
+			}
+
+			if (ts != nullptr) {
+				scheduleAction(&executionList, ts);
 			}
 		}
+		bool isPumpOpen = availableActions[PUMP_ACTION].state == MS_CHILD_RUNNING || availableActions[PUMP_ACTION].state == MS_CHILD_SCHEDULED;
+		availableActions[READ_SENSORS_ACTION].ti = isPumpOpen ? settings.siw : settings.sid;
 
-		if (ts != nullptr) {
-			scheduleAction(&executionList, ts);
-		}
+		free(acandidates);
 	}
-	bool isPumpOpen = availableActions[PUMP_ACTION].state == MS_CHILD_RUNNING || availableActions[PUMP_ACTION].state == MS_CHILD_SCHEDULED;
-	availableActions[READ_SENSORS_ACTION].ti = isPumpOpen ? settings.siw : settings.sid;
-
-	free(acandidates);
 }
 
 void startSensors(Action* a) {
@@ -1711,7 +1708,7 @@ int readButton() {
 
 void storeSetPreferences() {
 	preferences.begin(MS_PREFERENCES_ID, false);
-
+	preferences.putBool(MS_IRRIGATE_UNTIL_EXPIRY_KEY, settings.iue);
 	preferences.putBool(MS_FAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_FAR].active);
 	preferences.putBool(MS_MID_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_MID].active);
 	preferences.putBool(MS_NEAR_ACTIVE_SETTING_KEY, state.s[MS_SENSOR_NEAR].active);
@@ -1764,6 +1761,8 @@ void readStoredPreferences() {
 
 	settings.pd = preferences.getULong(MS_PUMP_MAX_DURATION_SETTING_KEY, settings.pd);
 	settings.pi = preferences.getULong(MS_PUMP_REACT_INT_DURATION_SETTING_KEY, settings.pi);
+
+	settings.iue = preferences.getBool(MS_IRRIGATE_UNTIL_EXPIRY_KEY, settings.iue);
 
 	settings.sid = preferences.getULong(MS_SENSOR_INTERVAL_DRY_SETTING_KEY, settings.sid);
 	settings.siw = preferences.getULong(MS_SENSOR_INTERVAL_PUMPING_SETTING_KEY, settings.siw);
@@ -1958,14 +1957,14 @@ void ms_init() {
 		br = readButton();
 		while (!(br > BUTTON_2_LOW && br < BUTTON_2_HIGH)) {
 			br = readButton();
-	}
+		}
 		showTextCaptionScreen(&display, MS_STARTING_PROMPT_TEXT);
 		delay(2000);
 		digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
 #ifdef ARDUINO_ARCH_ESP32
 		preferences.end();
 #endif
-}
+	}
 }
 
 // Fix for WIFI + analogRead from ADC2 issue
