@@ -118,11 +118,11 @@ char stringPool5b4[5];
 #define MS_BUTTON3 3
 #define MS_BUTTON4 4
 
-#define SCREENS_COUNT 13
+#define SCREENS_COUNT 16
 
 #define MS_HOME_SCREEN 0
 #define MS_SETTINGS_SCREEN 1
-#define MS_SENSOR_SETTINGS_SCREEN 2
+#define MS_SENSOR_POWER_SETTINGS_SCREEN 2
 #define MS_THRESHOLDS_SETTINGS_SCREEN 3
 #define MS_INTERVALS_SETTINGS_SCREEN 4
 #define MS_PUMP_INTERVALS_SETTINGS_SCREEN 5
@@ -133,6 +133,9 @@ char stringPool5b4[5];
 #define MS_CONNECTIVITY_INFO_SCREEN 10
 #define MS_WIFI_TOGGLE_SCREEN 11
 #define MS_THRESHOLDS_SETTINGS_MENU_SCREEN 12
+#define MS_SENSOR_SETTINGS_MENU_SCREEN 13
+#define MS_SENSOR_CALIBRATION_SETTINGS_SCREEN 14
+#define MS_CALIBRATION_INFO_SCREEN 15
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -241,7 +244,7 @@ Preferences preferences;
 #define MS_SENSOR_MID  1
 #define MS_SENSOR_NEAR  2
 
-#define ACTIONS_COUNT 8
+#define ACTIONS_COUNT 9
 
 // action defines
 #define READ_SENSORS_ACTION 0
@@ -252,6 +255,7 @@ Preferences preferences;
 #define DRAW_UI_ACTION 5
 #define WIFI_ACTION 6
 #define INTERPRET_SENSOR_DATA_ACTION 7
+#define CALIBRATE_SENSOR_ACTION 8
 
 
 // end of action defines
@@ -289,9 +293,19 @@ struct WiFIState {
 	bool isActive = false;
 } wifi;
 
+const int MS_SENSOR_CALIBRATION_INITIAL_DRY_STATE = 1;
+const int MS_SENSOR_CALIBRATION_READ_DRY_STATE = 2;
+const int MS_SENSOR_CALIBRATION_INITIAL_WET_STATE = 3;
+const int MS_SENSOR_CALIBRATION_READ_WET_STATE = 4;
+const int MS_SENSOR_CALIBRATION_STORE_VALUES_STATE = 5;
+const int MS_SENSOR_CALIBRATION_FINAL_STATE = 6;
+
 struct SensorsThresholdEditState {
 	int sensorCode = -1;
-} sensorThEditState;
+	int state = -1;
+	int pin = -1;
+	char* settingKey;
+} sensorEditState;
 
 struct MSysSettings {
 	unsigned long siw = 15000; // 15 seconds for sensor interval while watering
@@ -963,6 +977,67 @@ void tickInterpret(Action* a) {
 	}
 }
 
+
+bool calibrateSensorCanStart(Action* a) {
+	return availableActions[READ_SENSORS_ACTION].state == MS_PENDING && availableActions[PUMP_ACTION].state == MS_NON_ACTIVE;;
+}
+
+void startCalibrateSensor(Action* a) {
+	digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
+	state.sa = true;
+}
+
+void tickCalibrateSensor(Action* a) {
+	int startTime = (*a).st;
+	int currentTime = millis();
+
+	switch (sensorEditState.state)
+	{
+	case MS_SENSOR_CALIBRATION_READ_DRY_STATE:
+		if (currentTime - startTime < 10000) {
+			extractMedianPinValueForProperty(1, &state.s[sensorEditState.sensorCode].dry, sensorEditState.pin);
+		}
+		else {
+			sensorEditState.state = MS_SENSOR_CALIBRATION_INITIAL_WET_STATE;
+			requestStop(&executionList, a);
+		}
+		break;
+	case MS_SENSOR_CALIBRATION_READ_WET_STATE:
+		if (currentTime - startTime < 10000) {
+			extractMedianPinValueForProperty(0, &state.s[sensorEditState.sensorCode].wet, sensorEditState.pin);
+		}
+		else {
+			sensorEditState.state = MS_SENSOR_CALIBRATION_STORE_VALUES_STATE;
+		}
+		break;
+
+	case MS_SENSOR_CALIBRATION_STORE_VALUES_STATE:
+	{
+		preferences.begin(MS_PREFERENCES_ID, false);
+		preferences.putInt(MS_NEAR_DRY_SETTING_KEY, state.s[MS_SENSOR_NEAR].dry);
+		preferences.putInt(MS_MID_DRY_SETTING_KEY, state.s[MS_SENSOR_MID].dry);
+		preferences.putInt(MS_FAR_DRY_SETTING_KEY, state.s[MS_SENSOR_FAR].dry);
+		preferences.putInt(MS_NEAR_WET_SETTING_KEY, state.s[MS_SENSOR_NEAR].wet);
+		preferences.putInt(MS_MID_WET_SETTING_KEY, state.s[MS_SENSOR_MID].wet);
+		preferences.putInt(MS_FAR_WET_SETTING_KEY, state.s[MS_SENSOR_FAR].wet);
+		preferences.end();
+		sensorEditState.state = MS_SENSOR_CALIBRATION_FINAL_STATE;
+		requestStop(&executionList, a);
+	}
+	break;
+	}
+}
+
+void stopCalibrateSensor(Action* a) {
+	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
+	state.sa = false;
+}
+
+
+bool readSensorsCanStart(Action* a) {
+	return availableActions[CALIBRATE_SENSOR_ACTION].state == MS_NON_ACTIVE;
+}
+
 void startSensors(Action* a) {
 	digitalWrite(SENSOR_PIN, SENSOR_PIN_HIGH);
 	state.sa = true;
@@ -975,7 +1050,6 @@ void stopSensors(Action* a) {
 }
 
 void tickSensors(Action* a) {
-
 	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_NEAR].value, PIN_NEAR);
 	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_MID].value, PIN_MID);
 	extractMedianPinValueForProperty(0, &state.s[MS_SENSOR_FAR].value, PIN_FAR);
@@ -1029,18 +1103,18 @@ void handleThresholdsSettingsMenuScreen(int buttonValue) {
 
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
 		state.scr = MS_SETTINGS_SCREEN;
-		sensorThEditState.sensorCode = -1;
+		sensorEditState.sensorCode = -1;
 	}
 	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
-		sensorThEditState.sensorCode = MS_SENSOR_NEAR;
+		sensorEditState.sensorCode = MS_SENSOR_NEAR;
 		state.scr = MS_THRESHOLDS_SETTINGS_SCREEN;
 	}
 	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
-		sensorThEditState.sensorCode = MS_SENSOR_MID;
+		sensorEditState.sensorCode = MS_SENSOR_MID;
 		state.scr = MS_THRESHOLDS_SETTINGS_SCREEN;
 	}
 	else if (buttonValue > BUTTON_4_LOW && buttonValue < BUTTON_4_HIGH) {
-		sensorThEditState.sensorCode = MS_SENSOR_FAR;
+		sensorEditState.sensorCode = MS_SENSOR_FAR;
 		state.scr = MS_THRESHOLDS_SETTINGS_SCREEN;
 	}
 }
@@ -1049,7 +1123,7 @@ void drawThresholdsSettingsScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
 
-	Sensor* current = &state.s[sensorThEditState.sensorCode];
+	Sensor* current = &state.s[sensorEditState.sensorCode];
 
 	sprintf(stringPool20b3, "Editing: %s", (*current).name);
 	sprintf(stringPool20b1, "APV: %d%%", (*current).apv);
@@ -1063,7 +1137,7 @@ void drawThresholdsSettingsScreen(Action* a) {
 }
 
 void handleThresholdsSettingsScreen(int buttonValue) {
-	Sensor* current = &state.s[sensorThEditState.sensorCode];
+	Sensor* current = &state.s[sensorEditState.sensorCode];
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
 		state.scr = MS_THRESHOLDS_SETTINGS_MENU_SCREEN;
 	}
@@ -1079,6 +1153,142 @@ void handleThresholdsSettingsScreen(int buttonValue) {
 	}
 
 	storeSetPreferences();
+}
+
+void drawCalibrationInfoScreen(Action* a) {
+	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
+	initCanvas(&mainCanvas);
+	Sensor* s = &state.s[sensorEditState.sensorCode];
+	switch (sensorEditState.state)
+	{
+	case MS_SENSOR_CALIBRATION_INITIAL_DRY_STATE:
+	{
+		char* message1[] = { "Press B2", "to read", "DRY value" };
+		printAlignedTextStack(&mainCanvas, message1, 3, MS_FONT_TEXT_SIZE_LARGE, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+		printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
+	}
+	break;
+	case MS_SENSOR_CALIBRATION_READ_DRY_STATE:
+	{
+		sprintf(stringPool20b2, "Sensor: %s", (*s).name);
+		sprintf(stringPool20b3, "Value: %d", (*s).dry);
+		char* message2[] = { stringPool20b2,"Type: DRY", stringPool20b3 };
+		printAlignedTextStack(&mainCanvas, message2, 3, MS_FONT_TEXT_SIZE_LARGE, MS_H_LEFT, MS_H_CENTER | MS_V_CENTER);
+	}
+	break;
+	case MS_SENSOR_CALIBRATION_INITIAL_WET_STATE:
+	{
+		char* message3[] = { "Press B2", "to read", "WET value" };
+		printAlignedTextStack(&mainCanvas, message3, 3, MS_FONT_TEXT_SIZE_LARGE, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+		printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
+	}
+	break;
+	case MS_SENSOR_CALIBRATION_READ_WET_STATE:
+	{
+		sprintf(stringPool20b2, "Sensor: %s", (*s).name);
+		sprintf(stringPool20b3, "Value: %d", (*s).wet);
+		char* message4[] = { stringPool20b2, "Type: WET", stringPool20b3 };
+		printAlignedTextStack(&mainCanvas, message4, 3, MS_FONT_TEXT_SIZE_LARGE, MS_H_LEFT, MS_H_CENTER | MS_V_CENTER);
+	}
+	break;
+	case MS_SENSOR_CALIBRATION_FINAL_STATE:
+	{
+		char* message5[] = { "Press B1", "to exit" };
+		printAlignedTextStack(&mainCanvas, message5, 2, MS_FONT_TEXT_SIZE_LARGE, MS_H_LEFT, MS_H_CENTER | MS_V_CENTER);
+	}
+	break;
+	}
+	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
+	display.display();
+}
+
+void handleCalibrationInfoScreen(int buttonValue) {
+
+	if (sensorEditState.state == MS_SENSOR_CALIBRATION_INITIAL_DRY_STATE) {
+		if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+			sensorEditState.state = MS_SENSOR_CALIBRATION_READ_DRY_STATE;
+			scheduleAction(&executionList, &availableActions[CALIBRATE_SENSOR_ACTION]);
+		}
+		else if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+			state.scr = MS_SENSOR_CALIBRATION_SETTINGS_SCREEN;
+		}
+	}
+
+	if (sensorEditState.state == MS_SENSOR_CALIBRATION_INITIAL_WET_STATE) {
+		if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+			sensorEditState.state = MS_SENSOR_CALIBRATION_READ_WET_STATE;
+			scheduleAction(&executionList, &availableActions[CALIBRATE_SENSOR_ACTION]);
+		}
+		else if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+			state.scr = MS_SENSOR_CALIBRATION_SETTINGS_SCREEN;
+		}
+	}
+
+	if (sensorEditState.state == MS_SENSOR_CALIBRATION_FINAL_STATE) {
+		if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+			state.scr = MS_SENSOR_CALIBRATION_SETTINGS_SCREEN;
+		}
+	}
+}
+
+void drawSensorSettingsCalibrationScreen(Action* a) {
+	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
+	initCanvas(&mainCanvas);
+	char* text[] = { "B2 - Near", "B3 - Mid", "B4 - Far" };
+	printAlignedTextStack(&mainCanvas, text, 3, 1, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+	printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
+	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
+	display.display();
+}
+
+void handleSensorSettingsCalibrationScreen(int buttonValue) {
+	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+		state.scr = MS_SENSOR_SETTINGS_MENU_SCREEN;
+		sensorEditState.sensorCode = -1;
+	}
+	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+		sensorEditState.sensorCode = MS_SENSOR_NEAR;
+		sensorEditState.pin = PIN_NEAR;
+		sensorEditState.state = MS_SENSOR_CALIBRATION_INITIAL_DRY_STATE;
+		state.scr = MS_CALIBRATION_INFO_SCREEN;
+	}
+	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
+		sensorEditState.sensorCode = MS_SENSOR_MID;
+		sensorEditState.pin = PIN_MID;
+		sensorEditState.state = MS_SENSOR_CALIBRATION_INITIAL_DRY_STATE;
+		state.scr = MS_CALIBRATION_INFO_SCREEN;
+	}
+	else if (buttonValue > BUTTON_4_LOW && buttonValue < BUTTON_4_HIGH) {
+		sensorEditState.sensorCode = MS_SENSOR_FAR;
+		sensorEditState.pin = PIN_FAR;
+		sensorEditState.state = MS_SENSOR_CALIBRATION_INITIAL_DRY_STATE;
+		state.scr = MS_CALIBRATION_INFO_SCREEN;
+	}
+}
+
+void drawSensorSettingsMenuScreen(Action* a) {
+	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
+	initCanvas(&mainCanvas);
+	char* text[] = { "B2 - Turn On/Off", "B3 - Calibrate" };
+	printAlignedTextStack(&mainCanvas, text, 2, 1, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+	printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
+	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
+	display.display();
+}
+
+void handleSensorSettingsMenuScreen(int buttonValue) {
+	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+		state.scr = MS_SETTINGS_SCREEN;
+		sensorEditState.sensorCode = -1;
+	}
+	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+		sensorEditState.sensorCode = MS_SENSOR_NEAR;
+		state.scr = MS_SENSOR_POWER_SETTINGS_SCREEN;
+	}
+	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
+		sensorEditState.sensorCode = MS_SENSOR_MID;
+		state.scr = MS_SENSOR_CALIBRATION_SETTINGS_SCREEN;
+	}
 }
 
 void drawSensorSettingsScreen(Action* a) {
@@ -1129,7 +1339,7 @@ void drawSensorSettingsScreen(Action* a) {
 
 void handleSensorSettingsScreen(int buttonValue) {
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
-		state.scr = MS_SETTINGS_SCREEN;
+		state.scr = MS_SENSOR_SETTINGS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
 		bool isActive = state.s[MS_SENSOR_FAR].active = !state.s[MS_SENSOR_FAR].active;
@@ -1367,7 +1577,7 @@ void handleSettingsScreen(int buttonValue) {
 		state.scr = MS_INTERVALS_SETTINGS_SCREEN;
 	}
 	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
-		state.scr = MS_SENSOR_SETTINGS_SCREEN;
+		state.scr = MS_SENSOR_SETTINGS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_4_LOW && buttonValue < BUTTON_4_HIGH) {
 		state.scr = MS_THRESHOLDS_SETTINGS_MENU_SCREEN;
@@ -1527,8 +1737,17 @@ void populateScreens() {
 	availableScreens[MS_SETTINGS_SCREEN].drawUI = &drawSettingsScreen;
 	availableScreens[MS_SETTINGS_SCREEN].handleButtons = &handleSettingsScreen;
 
-	availableScreens[MS_SENSOR_SETTINGS_SCREEN].drawUI = &drawSensorSettingsScreen;
-	availableScreens[MS_SENSOR_SETTINGS_SCREEN].handleButtons = &handleSensorSettingsScreen;
+	availableScreens[MS_SENSOR_POWER_SETTINGS_SCREEN].drawUI = &drawSensorSettingsScreen;
+	availableScreens[MS_SENSOR_POWER_SETTINGS_SCREEN].handleButtons = &handleSensorSettingsScreen;
+
+	availableScreens[MS_SENSOR_SETTINGS_MENU_SCREEN].drawUI = &drawSensorSettingsMenuScreen;
+	availableScreens[MS_SENSOR_SETTINGS_MENU_SCREEN].handleButtons = &handleSensorSettingsMenuScreen;
+
+	availableScreens[MS_SENSOR_CALIBRATION_SETTINGS_SCREEN].drawUI = &drawSensorSettingsCalibrationScreen;
+	availableScreens[MS_SENSOR_CALIBRATION_SETTINGS_SCREEN].handleButtons = &handleSensorSettingsCalibrationScreen;
+
+	availableScreens[MS_CALIBRATION_INFO_SCREEN].drawUI = &drawCalibrationInfoScreen;
+	availableScreens[MS_CALIBRATION_INFO_SCREEN].handleButtons = &handleCalibrationInfoScreen;
 
 	availableScreens[MS_THRESHOLDS_SETTINGS_SCREEN].drawUI = &drawThresholdsSettingsScreen;
 	availableScreens[MS_THRESHOLDS_SETTINGS_SCREEN].handleButtons = &handleThresholdsSettingsScreen;
@@ -1563,6 +1782,22 @@ void populateScreens() {
 
 void populateActions() {
 
+	// calibrate sensor action
+	availableActions[CALIBRATE_SENSOR_ACTION].canStart = &calibrateSensorCanStart;
+	availableActions[CALIBRATE_SENSOR_ACTION].tick = &tickCalibrateSensor;
+	availableActions[CALIBRATE_SENSOR_ACTION].frozen = false; // when stopped the action will be removed from the list
+	availableActions[CALIBRATE_SENSOR_ACTION].stopRequested = false;
+	availableActions[CALIBRATE_SENSOR_ACTION].start = &startCalibrateSensor;
+	availableActions[CALIBRATE_SENSOR_ACTION].stop = &stopCalibrateSensor;
+	availableActions[CALIBRATE_SENSOR_ACTION].ti = 1;
+	availableActions[CALIBRATE_SENSOR_ACTION].td = 0; // duration of 0 means we never stop
+	availableActions[CALIBRATE_SENSOR_ACTION].to = 0;
+	availableActions[CALIBRATE_SENSOR_ACTION].clear = false;
+	availableActions[CALIBRATE_SENSOR_ACTION].state = MS_NON_ACTIVE;
+	availableActions[CALIBRATE_SENSOR_ACTION].child = nullptr;
+	availableActions[CALIBRATE_SENSOR_ACTION].lst = 0;
+	availableActions[CALIBRATE_SENSOR_ACTION].st = 0;
+	availableActions[CALIBRATE_SENSOR_ACTION].name = "calibrate";
 
 	// wifi action
 	availableActions[WIFI_ACTION].tick = &tickWifi;
@@ -1598,6 +1833,7 @@ void populateActions() {
 
 
 	// read sensors action
+	availableActions[READ_SENSORS_ACTION].canStart = &readSensorsCanStart;
 	availableActions[READ_SENSORS_ACTION].tick = &tickSensors;
 	availableActions[READ_SENSORS_ACTION].frozen = true;
 	availableActions[READ_SENSORS_ACTION].stopRequested = false;
@@ -1784,6 +2020,14 @@ void readStoredPreferences() {
 	preferences.end();
 }
 
+void scheduleDefaultActions() {
+	scheduleAction(&executionList, &availableActions[READ_SENSORS_ACTION]);
+	scheduleAction(&executionList, &availableActions[DRAW_UI_ACTION]);
+	if (wifi.isActive) {
+		scheduleAction(&executionList, &availableActions[WIFI_ACTION]);
+	}
+}
+
 void setupInitialState() {
 	if (availableActions != nullptr) {
 		// init the Actions library
@@ -1799,11 +2043,7 @@ void setupInitialState() {
 		state.scr = MS_HOME_SCREEN;
 
 		// schedule sensors and UI actions
-		scheduleAction(&executionList, &availableActions[READ_SENSORS_ACTION]);
-		scheduleAction(&executionList, &availableActions[DRAW_UI_ACTION]);
-		if (wifi.isActive) {
-			scheduleAction(&executionList, &availableActions[WIFI_ACTION]);
-		}
+		scheduleDefaultActions();
 	}
 	else {
 #ifdef DEBUG
@@ -1921,7 +2161,7 @@ void ms_init() {
 		EEPROM.put(sizeof(int) * 2, state.s[MS_SENSOR_FAR].dry);
 #endif
 
-		// fire buzzer to notify that dry values have been read
+
 		drawDryValuesScreen(&display);
 		delay(5000);
 		display.clearDisplay();

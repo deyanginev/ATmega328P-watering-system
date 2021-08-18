@@ -142,6 +142,10 @@ bool canStart(Action* a, unsigned long time) {
 		return false;
 	}
 
+	if ((*a).canStart != nullptr) {
+		return (*a).canStart(a);
+	}
+
 	return true;
 }
 

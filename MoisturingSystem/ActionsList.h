@@ -38,6 +38,7 @@ typedef struct Action {
 	void (*tick)(Action*);
 	void (*start)(Action*);
 	void (*stop)(Action*);
+	bool (*canStart)(Action*);
 	Action* child = nullptr; // a child action; Child actions are activated after the master action has been activated;
 	   // child actions are deactivated before the master action is deactivated;
 	   // child actions are not part of the execution queue
