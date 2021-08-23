@@ -16,7 +16,7 @@
 #define ARDUINO_ARCH_UNO
 #endif
 
-#define MS_SYSTEM_VERSION "0.22"
+#define MS_SYSTEM_VERSION "0.23"
 
 #define FONT_BASELINE_CORRECTION_NORMAL 6
 #define FONT_BASELINE_CORRECTION_LARGE 12
@@ -118,7 +118,8 @@ char stringPool5b4[5];
 #define MS_BUTTON3 3
 #define MS_BUTTON4 4
 
-#define SCREENS_COUNT 16
+#define SCREENS_COUNT 17
+
 
 #define MS_HOME_SCREEN 0
 #define MS_SETTINGS_SCREEN 1
@@ -136,6 +137,7 @@ char stringPool5b4[5];
 #define MS_SENSOR_SETTINGS_MENU_SCREEN 13
 #define MS_SENSOR_CALIBRATION_SETTINGS_SCREEN 14
 #define MS_CALIBRATION_INFO_SCREEN 15
+#define MS_EMPTY_SCREEN 16
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -1069,6 +1071,17 @@ const char* _hsResolveSensorInfo(char* target, Sensor* s) {
 	return target;
 }
 
+void drawEmptyScreen(Action* a) {
+	display.clearDisplay();
+	display.display();
+}
+
+void handleEmptyScreen(int buttonValue) {
+	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+		state.scr = MS_HOME_SCREEN;
+	}
+}
+
 void drawHomeScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
@@ -1078,7 +1091,7 @@ void drawHomeScreen(Action* a) {
 	sprintf(stringPool20b1, "WIFI: %s", _resolveWiFIStatusString(stringPool20b2, wifi.state));
 	char* message[] = { stringPool30b1, stringPool30b2, stringPool30b3, stringPool20b1 };
 	printAlignedTextStack(&mainCanvas, message, 4, 1, MS_H_CENTER, MS_H_CENTER | MS_V_TOP);
-	printAlignedText(&mainCanvas, "B1 - menu", 1, (MS_H_CENTER | MS_V_BOTTOM));
+	printAlignedText(&mainCanvas, "B1 - menu, B2 - dim", 1, (MS_H_CENTER | MS_V_BOTTOM));
 	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
 	display.display();
 }
@@ -1086,6 +1099,9 @@ void drawHomeScreen(Action* a) {
 void handleHomeScreen(int buttonValue) {
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
 		state.scr = MS_MENU_SCREEN;
+	}
+	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+		state.scr = MS_EMPTY_SCREEN;
 	}
 }
 
@@ -1694,7 +1710,7 @@ void startBuildScreen(Action* a) {
 
 void tickBuildScreen(Action* a) {
 	int screenIndex = state.scr;
-	if (screenIndex < SCREENS_COUNT) {
+	if (screenIndex >= 0 && screenIndex < SCREENS_COUNT) {
 		MSScreen* current = (MSScreen*)&availableScreens[screenIndex];
 		(*current).drawUI(a);
 		if (button.hasChanged) {
@@ -1733,6 +1749,9 @@ void tickPump(Action* a) {
 void populateScreens() {
 	availableScreens[MS_HOME_SCREEN].drawUI = &drawHomeScreen;
 	availableScreens[MS_HOME_SCREEN].handleButtons = &handleHomeScreen;
+
+	availableScreens[MS_EMPTY_SCREEN].drawUI = &drawEmptyScreen;
+	availableScreens[MS_EMPTY_SCREEN].handleButtons = &handleEmptyScreen;
 
 	availableScreens[MS_SETTINGS_SCREEN].drawUI = &drawSettingsScreen;
 	availableScreens[MS_SETTINGS_SCREEN].handleButtons = &handleSettingsScreen;
@@ -2136,7 +2155,7 @@ void ms_init() {
 #else
 		for (int i = 0; i < EEPROM.length(); i++) {
 			EEPROM.put(i, 0);
-		}
+	}
 #endif
 		display.clearDisplay();
 		showActionPromptScreen(&display, "B2 for", "dry state");
@@ -2204,7 +2223,7 @@ void ms_init() {
 #ifdef ARDUINO_ARCH_ESP32
 		preferences.end();
 #endif
-	}
+}
 }
 
 // Fix for WIFI + analogRead from ADC2 issue
