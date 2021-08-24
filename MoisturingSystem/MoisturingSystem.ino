@@ -118,7 +118,7 @@ char stringPool5b4[5];
 #define MS_BUTTON3 3
 #define MS_BUTTON4 4
 
-#define SCREENS_COUNT 17
+#define SCREENS_COUNT 19
 
 
 #define MS_HOME_SCREEN 0
@@ -138,6 +138,8 @@ char stringPool5b4[5];
 #define MS_SENSOR_CALIBRATION_SETTINGS_SCREEN 14
 #define MS_CALIBRATION_INFO_SCREEN 15
 #define MS_EMPTY_SCREEN 16
+#define MS_PUMP_SETTINGS_MENU_SCREEN 17
+#define MS_PUMP_CLEANING_INFO_SCREEN 18
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
@@ -246,7 +248,7 @@ Preferences preferences;
 #define MS_SENSOR_MID  1
 #define MS_SENSOR_NEAR  2
 
-#define ACTIONS_COUNT 9
+#define ACTIONS_COUNT 10
 
 // action defines
 #define READ_SENSORS_ACTION 0
@@ -258,6 +260,7 @@ Preferences preferences;
 #define WIFI_ACTION 6
 #define INTERPRET_SENSOR_DATA_ACTION 7
 #define CALIBRATE_SENSOR_ACTION 8
+#define CLEAN_PUMP_ACTION 9
 
 
 // end of action defines
@@ -661,6 +664,11 @@ void stopNearOutlet(Action* a) {
 }
 
 // end of Near
+
+bool canStartOutlet(Action* a) {
+	return availableActions[CLEAN_PUMP_ACTION].state != MS_RUNNING && availableActions[CALIBRATE_SENSOR_ACTION].state != MS_RUNNING;
+}
+
 //
 
 // wifi
@@ -755,6 +763,32 @@ unsigned long  _calculateOnBeforeTime(unsigned long curTime, Action* a) {
 	return onBeforeTime;
 }
 
+void _getActionStateString(int state, char* target) {
+	switch (state) {
+	case MS_NON_ACTIVE:
+		sprintf(target, "non-active");
+		break;
+	case MS_PENDING:
+		sprintf(target, "pending");
+		break;
+	case MS_SCHEDULED:
+		sprintf(target, "scheduled");
+		break;
+	case MS_RUNNING:
+		sprintf(target, "running");
+		break;
+	case MS_CHILD_RUNNING:
+		sprintf(target, "child-running");
+		break;
+	case MS_CHILD_PENDING:
+		sprintf(target, "child-pending");
+		break;
+	case MS_CHILD_SCHEDULED:
+		sprintf(target, "child-scheduled");
+		break;
+	}
+}
+
 void _generateStatus(DynamicJsonDocument* doc) {
 	(*doc)["status"] = "OK";
 	unsigned long time = millis();
@@ -781,6 +815,12 @@ void _generateStatus(DynamicJsonDocument* doc) {
 
 		(*doc)["sensors"][(*cur).name]["thresholds"]["apv"] = (*cur).apv;
 		(*doc)["sensors"][(*cur).name]["thresholds"]["dapv"] = (*cur).dapv;
+	}
+
+	for (int i = 0; i < ACTIONS_COUNT; i++) {
+		Action* cur = &availableActions[i];
+		_getActionStateString((*cur).state, stringPool20b1);
+		(*doc)["actions"][(*cur).name] = stringPool20b1;
 	}
 }
 
@@ -981,7 +1021,7 @@ void tickInterpret(Action* a) {
 
 
 bool calibrateSensorCanStart(Action* a) {
-	return availableActions[READ_SENSORS_ACTION].state == MS_PENDING && availableActions[PUMP_ACTION].state == MS_NON_ACTIVE;;
+	return availableActions[READ_SENSORS_ACTION].state != MS_RUNNING && availableActions[PUMP_ACTION].state != MS_RUNNING;
 }
 
 void startCalibrateSensor(Action* a) {
@@ -1037,7 +1077,7 @@ void stopCalibrateSensor(Action* a) {
 
 
 bool readSensorsCanStart(Action* a) {
-	return availableActions[CALIBRATE_SENSOR_ACTION].state == MS_NON_ACTIVE;
+	return availableActions[CALIBRATE_SENSOR_ACTION].state != MS_RUNNING;
 }
 
 void startSensors(Action* a) {
@@ -1285,8 +1325,8 @@ void handleSensorSettingsCalibrationScreen(int buttonValue) {
 void drawSensorSettingsMenuScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
-	char* text[] = { "B2 - Turn On/Off", "B3 - Calibrate" };
-	printAlignedTextStack(&mainCanvas, text, 2, 1, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+	char* text[] = { "B2 - Turn On/Off", "B3 - Calibrate", "B4 - Intervals" };
+	printAlignedTextStack(&mainCanvas, text, 3, 1, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
 	printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
 	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
 	display.display();
@@ -1304,6 +1344,10 @@ void handleSensorSettingsMenuScreen(int buttonValue) {
 	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
 		sensorEditState.sensorCode = MS_SENSOR_MID;
 		state.scr = MS_SENSOR_CALIBRATION_SETTINGS_SCREEN;
+	}
+	else if (buttonValue > BUTTON_4_LOW && buttonValue < BUTTON_4_HIGH) {
+		sensorEditState.sensorCode = MS_SENSOR_MID;
+		state.scr = MS_SENSOR_INTERVALS_SETTINGS_SCREEN;
 	}
 }
 
@@ -1578,7 +1622,7 @@ void handleProcessesScreen(int buttonValue) {
 void drawSettingsScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
-	char* text[] = { "B2 - Intervals", "B3 - Sensors", "B4 - Thresholds" };
+	char* text[] = { "B2 - Pump", "B3 - Sensors", "B4 - Thresholds" };
 	printAlignedTextStack(&mainCanvas, text, 3, 1, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
 	printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
 	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
@@ -1590,7 +1634,7 @@ void handleSettingsScreen(int buttonValue) {
 		state.scr = MS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
-		state.scr = MS_INTERVALS_SETTINGS_SCREEN;
+		state.scr = MS_PUMP_SETTINGS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
 		state.scr = MS_SENSOR_SETTINGS_MENU_SCREEN;
@@ -1617,7 +1661,7 @@ void drawSensorIntervalsSettingsScreen(Action* a) {
 
 void handleSensorIntervalsSettingsScreen(int buttonValue) {
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
-		state.scr = MS_INTERVALS_SETTINGS_SCREEN;
+		state.scr = MS_SENSOR_SETTINGS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
 		int step = 10000;
@@ -1642,6 +1686,28 @@ void handleSensorIntervalsSettingsScreen(int buttonValue) {
 	storeSetPreferences();
 }
 
+void drawPumpSettingsScreen(Action* a) {
+	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
+	initCanvas(&mainCanvas);
+	char* text[] = { "B2 - Intervals", "B3 - Clean" };
+	printAlignedTextStack(&mainCanvas, text, 2, 1, MS_H_LEFT, MS_H_CENTER | MS_V_TOP);
+	printAlignedText(&mainCanvas, MS_BACK_BUTTON_PROMPT, MS_FONT_TEXT_SIZE_NORMAL, MS_H_CENTER | MS_V_BOTTOM);
+	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
+	display.display();
+}
+
+void handlePumpSettingsScreen(int buttonValue) {
+	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
+		state.scr = MS_SETTINGS_SCREEN;
+	}
+	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+		state.scr = MS_PUMP_INTERVALS_SETTINGS_SCREEN;
+	}
+	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
+		state.scr = MS_PUMP_CLEANING_INFO_SCREEN;
+	}
+}
+
 void drawPumpIntervalsSettingsScreen(Action* a) {
 	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
 	initCanvas(&mainCanvas);
@@ -1657,7 +1723,7 @@ void drawPumpIntervalsSettingsScreen(Action* a) {
 
 void handlePumpIntervalsSettingsScreen(int buttonValue) {
 	if (buttonValue > BUTTON_1_LOW && buttonValue < BUTTON_1_HIGH) {
-		state.scr = MS_INTERVALS_SETTINGS_SCREEN;
+		state.scr = MS_PUMP_SETTINGS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
 		int minute = 60000;
@@ -1674,6 +1740,37 @@ void handlePumpIntervalsSettingsScreen(int buttonValue) {
 
 
 	storeSetPreferences();
+}
+
+
+void drawPumpCleaningInfoScreen(Action* a) {
+	GFXcanvas16 mainCanvas = GFXcanvas16(SCREEN_WIDTH, SCREEN_HEIGHT);
+	initCanvas(&mainCanvas);
+	Action* ca = &availableActions[CLEAN_PUMP_ACTION];
+	if ((*ca).state == MS_NON_ACTIVE) {
+		char* message1[] = { "Press B2", "to", "start" };
+		printAlignedTextStack(&mainCanvas, message1, 3, MS_FONT_TEXT_SIZE_LARGE, MS_H_CENTER, MS_H_CENTER | MS_V_CENTER);
+	}
+	else {
+		char* message1[] = { "Press B2", "to", "stop" };
+		printAlignedTextStack(&mainCanvas, message1, 3, MS_FONT_TEXT_SIZE_LARGE, MS_H_CENTER, MS_H_CENTER | MS_V_CENTER);
+	}
+	display.drawRGBBitmap(0, 0, mainCanvas.getBuffer(), mainCanvas.width(), mainCanvas.height());
+	display.display();
+}
+
+void handlePumpCleaningInfoScreen(int buttonValue) {
+	Action* ca = &availableActions[CLEAN_PUMP_ACTION];
+
+	if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
+		if ((*ca).state == MS_NON_ACTIVE) {
+			scheduleAction(&executionList, ca);
+		}
+		else {
+			state.scr = MS_PUMP_SETTINGS_MENU_SCREEN;
+			requestStop(&executionList, ca);
+		}
+	}
 }
 
 void drawIntervalsSettingsScreen(Action* a) {
@@ -1728,6 +1825,23 @@ void stopBuildScreen(Action* a) {
 // end of Display
 
 // Pump
+bool cleanPumpCanStart(Action* a) {
+	return availableActions[PUMP_ACTION].state != MS_RUNNING;
+}
+
+void startCleanPump(Action* a) {
+	digitalWrite(PUMP_PIN, PUMP_PIN_HIGH);
+	state.p = true;
+}
+
+void tickCleanPump(Action* a) {
+}
+
+void stopCleanPump(Action* a) {
+	digitalWrite(PUMP_PIN, PUMP_PIN_LOW);
+	state.p = false;
+}
+
 void startPump(Action* a) {
 	digitalWrite(PUMP_PIN, PUMP_PIN_HIGH);
 	state.p = true;
@@ -1777,8 +1891,14 @@ void populateScreens() {
 	availableScreens[MS_INTERVALS_SETTINGS_SCREEN].drawUI = &drawIntervalsSettingsScreen;
 	availableScreens[MS_INTERVALS_SETTINGS_SCREEN].handleButtons = &handleIntervalsSettingsScreen;
 
+	availableScreens[MS_PUMP_SETTINGS_MENU_SCREEN].drawUI = &drawPumpSettingsScreen;
+	availableScreens[MS_PUMP_SETTINGS_MENU_SCREEN].handleButtons = &handlePumpSettingsScreen;
+
 	availableScreens[MS_PUMP_INTERVALS_SETTINGS_SCREEN].drawUI = &drawPumpIntervalsSettingsScreen;
 	availableScreens[MS_PUMP_INTERVALS_SETTINGS_SCREEN].handleButtons = &handlePumpIntervalsSettingsScreen;
+
+	availableScreens[MS_PUMP_CLEANING_INFO_SCREEN].drawUI = &drawPumpCleaningInfoScreen;
+	availableScreens[MS_PUMP_CLEANING_INFO_SCREEN].handleButtons = &handlePumpCleaningInfoScreen;
 
 	availableScreens[MS_SENSOR_INTERVALS_SETTINGS_SCREEN].drawUI = &drawSensorIntervalsSettingsScreen;
 	availableScreens[MS_SENSOR_INTERVALS_SETTINGS_SCREEN].handleButtons = &handleSensorIntervalsSettingsScreen;
@@ -1869,6 +1989,7 @@ void populateActions() {
 	availableActions[READ_SENSORS_ACTION].name = "sensors";
 
 	// open far valve action
+	availableActions[OUTLET_FAR_ACTION].canStart = &canStartOutlet;
 	availableActions[OUTLET_FAR_ACTION].tick = &tickFarOutlet;
 	availableActions[OUTLET_FAR_ACTION].frozen = false;
 	availableActions[OUTLET_FAR_ACTION].stopRequested = false;
@@ -1888,6 +2009,7 @@ void populateActions() {
 	state.s[MS_SENSOR_FAR].ai = OUTLET_FAR_ACTION;
 
 	// open mid valve action
+	availableActions[OUTLET_MID_ACTION].canStart = &canStartOutlet;
 	availableActions[OUTLET_MID_ACTION].tick = &tickMidOutlet;
 	availableActions[OUTLET_MID_ACTION].frozen = false;
 	availableActions[OUTLET_MID_ACTION].stopRequested = false;
@@ -1906,6 +2028,7 @@ void populateActions() {
 	state.s[MS_SENSOR_MID].ai = OUTLET_MID_ACTION;
 
 	// open near valve action
+	availableActions[OUTLET_NEAR_ACTION].canStart = &canStartOutlet;
 	availableActions[OUTLET_NEAR_ACTION].tick = &tickNearOutlet;
 	availableActions[OUTLET_NEAR_ACTION].frozen = false;
 	availableActions[OUTLET_NEAR_ACTION].stopRequested = false;
@@ -1938,6 +2061,23 @@ void populateActions() {
 	availableActions[PUMP_ACTION].lst = 0;
 	availableActions[PUMP_ACTION].st = 0;
 	availableActions[PUMP_ACTION].name = "pump";
+
+	// clean pump action
+	availableActions[CLEAN_PUMP_ACTION].canStart = &cleanPumpCanStart;
+	availableActions[CLEAN_PUMP_ACTION].tick = &tickCleanPump;
+	availableActions[CLEAN_PUMP_ACTION].frozen = false;
+	availableActions[CLEAN_PUMP_ACTION].stopRequested = false;
+	availableActions[CLEAN_PUMP_ACTION].start = &startCleanPump;
+	availableActions[CLEAN_PUMP_ACTION].stop = &stopCleanPump;
+	availableActions[CLEAN_PUMP_ACTION].ti = 0;
+	availableActions[CLEAN_PUMP_ACTION].td = 0;
+	availableActions[CLEAN_PUMP_ACTION].clear = false;
+	availableActions[CLEAN_PUMP_ACTION].to = 0;
+	availableActions[CLEAN_PUMP_ACTION].state = MS_NON_ACTIVE;
+	availableActions[CLEAN_PUMP_ACTION].child = nullptr;
+	availableActions[CLEAN_PUMP_ACTION].lst = 0;
+	availableActions[CLEAN_PUMP_ACTION].st = 0;
+	availableActions[CLEAN_PUMP_ACTION].name = "clean-pump";
 
 
 	// draw home action
@@ -2155,7 +2295,7 @@ void ms_init() {
 #else
 		for (int i = 0; i < EEPROM.length(); i++) {
 			EEPROM.put(i, 0);
-	}
+		}
 #endif
 		display.clearDisplay();
 		showActionPromptScreen(&display, "B2 for", "dry state");
@@ -2223,8 +2363,8 @@ void ms_init() {
 #ifdef ARDUINO_ARCH_ESP32
 		preferences.end();
 #endif
-}
-}
+		}
+	}
 
 // Fix for WIFI + analogRead from ADC2 issue
 

@@ -278,7 +278,7 @@ void doQueueActions(ActionsList* executionList) {
 					Serial.println(indexOfAction(executionList, child));
 #endif
 					(*child).stop(child);
-					(*child).state = MS_NON_ACTIVE;
+					(*child).state = MS_CHILD_PENDING;
 					child = (*child).child;
 				}
 
