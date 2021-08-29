@@ -1079,7 +1079,7 @@ void stopCalibrateSensor(Action* a) {
 
 
 bool readSensorsCanStart(Action* a) {
-	return availableActions[CALIBRATE_SENSOR_ACTION].state != MS_RUNNING && availableActions[IRRIGATE_ACTION].state != MS_RUNNING;
+	return availableActions[CALIBRATE_SENSOR_ACTION].state != MS_RUNNING && availableActions[IRRIGATE_ACTION].state != MS_RUNNING && availableActions[CLEAN_PUMP_ACTION].state != MS_RUNNING;
 }
 
 void startSensors(Action* a) {
@@ -1940,7 +1940,7 @@ void stopIrrigate(Action* a) {
 }
 
 bool cleanPumpCanStart(Action* a) {
-	return availableActions[PUMP_ACTION].state != MS_CHILD_RUNNING && availableActions[IRRIGATE_ACTION].state != MS_RUNNING;
+	return availableActions[PUMP_ACTION].state != MS_CHILD_RUNNING && availableActions[IRRIGATE_ACTION].state != MS_RUNNING && availableActions[READ_SENSORS_ACTION].state != MS_RUNNING;
 }
 
 void startCleanPump(Action* a) {
