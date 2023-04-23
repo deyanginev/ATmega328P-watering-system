@@ -16,7 +16,7 @@
 #define ARDUINO_ARCH_UNO
 #endif
 
-#define MS_SYSTEM_VERSION "0.24"
+#define MS_SYSTEM_VERSION "0.25"
 
 #define FONT_BASELINE_CORRECTION_NORMAL 6
 #define FONT_BASELINE_CORRECTION_LARGE 12
@@ -1200,12 +1200,12 @@ void handleThresholdsSettingsScreen(int buttonValue) {
 		state.scr = MS_THRESHOLDS_SETTINGS_MENU_SCREEN;
 	}
 	else if (buttonValue > BUTTON_2_LOW && buttonValue < BUTTON_2_HIGH) {
-		int upperLimit = (*current).dapv - 5;
-		int nv = _min(((*current).apv + 5) % (*current).dapv, upperLimit);
+		int upperLimit = _max((*current).dapv - 5, 0);
+		int nv = _min(((*current).apv + 5) % _max((*current).dapv, 5), upperLimit);
 		(*current).apv = nv;
 	}
 	else if (buttonValue > BUTTON_3_LOW && buttonValue < BUTTON_3_HIGH) {
-		int nv = _max(_min(((*current).dapv + 5) % 105, 100), (*current).apv + 5);
+		int nv = _max(_min(((*current).dapv + 5) % 105, 100), _min((*current).apv + 5, 100));
 		(*current).dapv = nv;
 
 	}
