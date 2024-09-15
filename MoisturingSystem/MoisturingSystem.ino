@@ -1,4 +1,5 @@
 
+#include <dummy.h>
 #include "ActionsList.h"
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -294,7 +295,7 @@ enum WIFIState {
 
 struct WiFIState {
 	char* ssid = "Mirwais";
-	char* password = "importantpassword";
+	char* password = "1mportantpassword";
 	int state = MS_WIFI_STOPPED;
 	bool isActive = false;
 } wifi;
@@ -1015,7 +1016,15 @@ void tickInterpret(Action* a) {
 			}
 		}
 		bool isPumpOpen = availableActions[PUMP_ACTION].state == MS_CHILD_RUNNING || availableActions[PUMP_ACTION].state == MS_CHILD_SCHEDULED;
+#ifdef DEBUG
+		Serial.printf("Pump action state: %d\n", availableActions[PUMP_ACTION].state);
+		Serial.printf("Pump is open: %d\n", isPumpOpen);
+#endif
 		availableActions[READ_SENSORS_ACTION].ti = isPumpOpen ? settings.siw : settings.sid;
+
+#ifdef DEBUG
+		Serial.printf("Set sensor interval: %d\n", availableActions[READ_SENSORS_ACTION].ti);
+#endif
 
 		free(acandidates);
 	}
@@ -2232,7 +2241,8 @@ void populateActions() {
 }
 
 int readButton() {
-	return fixedAnalogRead(BUTTONS_PIN);
+	int buttonValue = fixedAnalogRead(BUTTONS_PIN);
+	return buttonValue;
 }
 
 void storeSetPreferences() {
@@ -2549,8 +2559,11 @@ void setup() {
 	digitalWrite(PUMP_PIN, PUMP_PIN_LOW);
 
 	pinMode(SENSOR_PIN, OUTPUT); // sensor relay
-	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW);
+	digitalWrite(SENSOR_PIN, SENSOR_PIN_LOW); 
+
+#ifdef DEBUG
 	Serial.begin(9600);
+#endif
 
 	allocateMemPools();
 	initActionsList(ACTIONS_COUNT);
